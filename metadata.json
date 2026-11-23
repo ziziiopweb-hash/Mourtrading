@@ -1,0 +1,6 @@
+{
+  "name": "MourTrading",
+  "description": "Smart Crypto Market Intelligence — Real-time Binance Spot market data, professional candlestick charts, mathematical technical indicators, Gemini AI trading analysis, Spot signals, portfolio tracking, and risk management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
