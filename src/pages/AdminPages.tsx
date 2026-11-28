@@ -8,10 +8,16 @@ import {
   Signal,
   Users,
 } from 'lucide-react';
+import {
+  AdminSignalRowActions,
+  SignalEditModal,
+  SignalsAdminManager,
+} from '../components/SignalsAdminManager.tsx';
 import { useApp } from '../contexts/AppContext.tsx';
 import { apiFetch } from '../lib/api.ts';
 import { formatPrice, formatTimestamp } from '../lib/formatters.ts';
-import type { AppConfig, Timeframe, TradingSignal, UserProfile } from '../types/trading.ts';
+import { fetchAllSignals, type SignalWithLive } from '../lib/signalsService.ts';
+import type { AppConfig, UserProfile } from '../types/trading.ts';
 
 function AdminGuard({ children }: { children: React.ReactNode }) {
   const { isAdmin, authLoading, navigate } = useApp();
@@ -276,61 +282,21 @@ export function AdminUsersPage() {
 }
 
 export function AdminSignalsPage() {
-  const { language, t } = useApp();
+  const { language, t, tickerMap } = useApp();
   const isAr = language === 'ar';
 
-  const [signals, setSignals] = useState<TradingSignal[]>([]);
-  const [symbol, setSymbol] = useState('BTCUSDT');
-  const [timeframe, setTimeframe] = useState<Timeframe>('4h');
-  const [entryLow, setEntryLow] = useState('');
-  const [entryHigh, setEntryHigh] = useState('');
-  const [tp1, setTp1] = useState('');
-  const [tp2, setTp2] = useState('');
-  const [tp3, setTp3] = useState('');
-  const [stopLoss, setStopLoss] = useState('');
-  const [explanation, setExplanation] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [signals, setSignals] = useState<SignalWithLive[]>([]);
+  const [editingSignal, setEditingSignal] = useState<SignalWithLive | null>(null);
 
   const loadSignals = () => {
-    apiFetch<{ signals: TradingSignal[] }>('/api/signals')
-      .then((res) => setSignals(res.signals || []))
+    fetchAllSignals()
+      .then((res) => setSignals(res.signals))
       .catch(() => {});
   };
 
   useEffect(() => {
     loadSignals();
   }, []);
-
-  const handlePublish = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    try {
-      await apiFetch('/api/admin/signals', {
-        method: 'POST',
-        body: JSON.stringify({
-          symbol,
-          timeframe,
-          entryLow: Number(entryLow),
-          entryHigh: Number(entryHigh),
-          tp1: Number(tp1),
-          tp2: Number(tp2),
-          tp3: Number(tp3),
-          stopLoss: Number(stopLoss),
-          explanation,
-          source: 'ADMIN',
-        }),
-      });
-      setExplanation('');
-      loadSignals();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to publish signal');
-    }
-  };
-
-  const handleCancel = async (id: string) => {
-    await apiFetch(`/api/admin/signals/${id}/cancel`, { method: 'PATCH' }).catch(() => {});
-    loadSignals();
-  };
 
   return (
     <AdminGuard>
@@ -340,132 +306,59 @@ export function AdminSignalsPage() {
           <span>{t.nav.adminSignals}</span>
         </h1>
 
-        <form onSubmit={handlePublish} className="bg-[#0D131F] border border-white/10 rounded-xl p-5 space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <input
-              type="text"
-              required
-              dir="ltr"
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-              placeholder="BTCUSDT"
-              className="min-h-[40px] px-3 rounded-lg bg-[#070A0F] border border-white/12 text-xs font-mono-num"
-            />
-            <select
-              value={timeframe}
-              onChange={(e) => setTimeframe(e.target.value as Timeframe)}
-              dir="ltr"
-              className="min-h-[40px] px-3 rounded-lg bg-[#070A0F] border border-white/12 text-xs font-mono-num"
-            >
-              {['1m', '5m', '15m', '1h', '4h', '1d', '1w'].map((tf) => (
-                <option key={tf} value={tf}>
-                  {tf.toUpperCase()}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              step="any"
-              required
-              dir="ltr"
-              value={entryLow}
-              onChange={(e) => setEntryLow(e.target.value)}
-              placeholder="Entry Low"
-              className="min-h-[40px] px-3 rounded-lg bg-[#070A0F] border border-white/12 text-xs font-mono-num"
-            />
-            <input
-              type="number"
-              step="any"
-              required
-              dir="ltr"
-              value={entryHigh}
-              onChange={(e) => setEntryHigh(e.target.value)}
-              placeholder="Entry High"
-              className="min-h-[40px] px-3 rounded-lg bg-[#070A0F] border border-white/12 text-xs font-mono-num"
-            />
-            <input
-              type="number"
-              step="any"
-              required
-              dir="ltr"
-              value={tp1}
-              onChange={(e) => setTp1(e.target.value)}
-              placeholder="TP1"
-              className="min-h-[40px] px-3 rounded-lg bg-[#070A0F] border border-white/12 text-xs font-mono-num"
-            />
-            <input
-              type="number"
-              step="any"
-              required
-              dir="ltr"
-              value={tp2}
-              onChange={(e) => setTp2(e.target.value)}
-              placeholder="TP2"
-              className="min-h-[40px] px-3 rounded-lg bg-[#070A0F] border border-white/12 text-xs font-mono-num"
-            />
-            <input
-              type="number"
-              step="any"
-              required
-              dir="ltr"
-              value={tp3}
-              onChange={(e) => setTp3(e.target.value)}
-              placeholder="TP3"
-              className="min-h-[40px] px-3 rounded-lg bg-[#070A0F] border border-white/12 text-xs font-mono-num"
-            />
-            <input
-              type="number"
-              step="any"
-              required
-              dir="ltr"
-              value={stopLoss}
-              onChange={(e) => setStopLoss(e.target.value)}
-              placeholder="Stop Loss"
-              className="min-h-[40px] px-3 rounded-lg bg-[#070A0F] border border-white/12 text-xs font-mono-num"
-            />
-          </div>
-
-          <textarea
-            required
-            rows={3}
-            value={explanation}
-            onChange={(e) => setExplanation(e.target.value)}
-            placeholder={isAr ? 'الشرح الفني للإشارة...' : 'Technical explanation...'}
-            className="w-full p-3 rounded-lg bg-[#070A0F] border border-white/12 text-xs text-[#F8FAFC]"
-          />
-
-          {error && <div className="text-xs text-[#EF4444]">{error}</div>}
-
-          <button
-            type="submit"
-            className="px-5 py-2.5 rounded-xl bg-[#D4AF37] text-[#070A0F] text-xs font-bold cursor-pointer"
-          >
-            {isAr ? 'نشر إشارة Spot رسمية' : 'Publish Official Spot Signal'}
-          </button>
-        </form>
+        <SignalsAdminManager
+          onSignalCreated={(created) =>
+            setSignals((prev) => [created, ...prev.filter((s) => s.id !== created.id)])
+          }
+          onAutoScanCompleted={() => loadSignals()}
+        />
 
         <div className="bg-[#0D131F] border border-white/10 rounded-xl divide-y divide-white/8">
-          {signals.map((sig) => (
-            <div key={sig.id} className="p-4 flex flex-wrap items-center justify-between gap-3 text-xs font-mono-num">
-              <div>
-                <div className="font-bold text-[#F8FAFC]">
-                  {sig.symbol} · {sig.status}
-                </div>
-                <div className="text-slate-400">
-                  Entry {formatPrice(sig.entryLow)}–{formatPrice(sig.entryHigh)} · SL {formatPrice(sig.stopLoss)}
-                </div>
-              </div>
-              {sig.status === 'ACTIVE' && (
-                <button
-                  onClick={() => handleCancel(sig.id)}
-                  className="px-3 py-1.5 rounded bg-[#EF4444]/15 text-[#EF4444] cursor-pointer"
-                >
-                  Cancel Signal
-                </button>
-              )}
+          {signals.length === 0 ? (
+            <div className="p-6 text-center text-xs text-slate-400">
+              {isAr ? 'لا توجد إشارات منشورة بعد.' : 'No published signals yet.'}
             </div>
-          ))}
+          ) : (
+            signals.map((sig) => {
+              const livePrice = tickerMap.get(sig.symbol)?.lastPrice ?? sig.livePrice ?? null;
+              return (
+                <div key={sig.id} className="p-4 space-y-2.5 text-xs font-mono-num">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-[#F8FAFC]">
+                        {sig.symbol} · {sig.status}{' '}
+                        <span className="text-[#E5C158] font-normal">
+                          ({sig.source === 'AUTO' || sig.source === 'AI' ? (isAr ? 'تلقائية' : 'Auto') : isAr ? 'يدوية' : 'Manual'})
+                        </span>
+                      </div>
+                      <div className="text-slate-400 mt-0.5">
+                        Entry {formatPrice(sig.entryLow)}–{formatPrice(sig.entryHigh)} · TP1{' '}
+                        {formatPrice(sig.tp1)} · SL {formatPrice(sig.stopLoss)}
+                      </div>
+                    </div>
+                  </div>
+                  <AdminSignalRowActions
+                    signal={sig}
+                    livePrice={livePrice}
+                    onEdit={() => setEditingSignal(sig)}
+                    onUpdated={(updated) =>
+                      setSignals((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+                    }
+                    onDeleted={(id) => setSignals((prev) => prev.filter((s) => s.id !== id))}
+                  />
+                </div>
+              );
+            })
+          )}
         </div>
+
+        <SignalEditModal
+          signal={editingSignal}
+          onClose={() => setEditingSignal(null)}
+          onSaved={(updated) =>
+            setSignals((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+          }
+        />
       </div>
     </AdminGuard>
   );

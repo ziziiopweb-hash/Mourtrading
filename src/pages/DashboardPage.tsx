@@ -4,6 +4,7 @@ import { useApp } from '../contexts/AppContext.tsx';
 import { apiFetch } from '../lib/api.ts';
 import { formatPercent, formatPrice } from '../lib/formatters.ts';
 import { ConfigNotice } from '../components/ConfigNotice.tsx';
+import { fetchAllSignals } from '../lib/signalsService.ts';
 import type { TradingSignal } from '../types/trading.ts';
 
 export function DashboardPage() {
@@ -14,8 +15,10 @@ export function DashboardPage() {
   const [signals, setSignals] = useState<TradingSignal[]>([]);
 
   useEffect(() => {
-    apiFetch<{ signals: TradingSignal[] }>('/api/signals?status=ACTIVE')
-      .then((res) => setSignals((res.signals || []).slice(0, 4)))
+    fetchAllSignals()
+      .then((res) =>
+        setSignals((res.signals || []).filter((s) => s.status === 'ACTIVE').slice(0, 4)),
+      )
       .catch(() => {});
 
     if (user) {

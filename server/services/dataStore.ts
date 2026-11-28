@@ -14,12 +14,25 @@ import {
 } from './supabase.ts';
 import {
   createDefaultAppConfigRow,
+  createDefaultAutoSignalsConfigRow,
   localStore,
   type LocalPriceAlertRow,
   type LocalSignalRow,
   type LocalUserProfileRow,
 } from './localStore.ts';
-import type { AiAnalysisReport, SignalStatus } from '../../src/types/trading.ts';
+import type {
+  AiAnalysisReport,
+  AutoSignalsConfig,
+  SignalDirection,
+  SignalSource,
+  SignalStatus,
+  SignalTradeType,
+  Timeframe,
+} from '../../src/types/trading.ts';
+import {
+  computeSignalResultPercent,
+  evaluateSignalAgainstPrice,
+} from '../../src/lib/signalEvaluator.ts';
 
 async function withSupabaseOrLocal<T>(
   sbTask: (sb: SupabaseClient) => Promise<T>,
@@ -1202,18 +1215,35 @@ export async function getUserAiHistory(userId: string, limit: number): Promise<A
 
 function mapSignalRow(sig: Record<string, unknown>, livePrice: number | null) {
   const symbol = String(sig.symbol || '');
+  const rawSource = String(sig.source || 'ADMIN').toUpperCase();
+  const source: SignalSource =
+    rawSource === 'AUTO' ? 'AUTO' : rawSource === 'AI' ? 'AI' : 'ADMIN';
+  const rawTradeType = String(sig.trade_type || 'SPOT_BUY').toUpperCase();
+  const tradeType: SignalTradeType =
+    rawTradeType === 'SPOT_SCALP' || rawTradeType === 'SPOT_SWING'
+      ? (rawTradeType as SignalTradeType)
+      : 'SPOT_BUY';
+  const entryLow = Number(sig.entry_low);
+  const entryHigh = Number(sig.entry_high);
+  const stopLoss = Number(sig.stop_loss);
+  const rawDirection = String(sig.direction || '').toUpperCase();
+  const direction: SignalDirection =
+    rawDirection === 'SHORT' || (rawDirection !== 'LONG' && stopLoss > entryHigh) ? 'SHORT' : 'LONG';
+
   return {
     id: String(sig.id),
     symbol,
-    source: sig.source === 'AI' ? ('AI' as const) : ('ADMIN' as const),
-    timeframe: String(sig.timeframe),
+    source,
+    tradeType,
+    direction,
+    timeframe: String(sig.timeframe) as Timeframe,
     status: String(sig.status) as SignalStatus,
-    entryLow: Number(sig.entry_low),
-    entryHigh: Number(sig.entry_high),
+    entryLow,
+    entryHigh,
     tp1: Number(sig.tp1),
     tp2: Number(sig.tp2),
     tp3: Number(sig.tp3),
-    stopLoss: Number(sig.stop_loss),
+    stopLoss,
     riskRewardRatio: Number(sig.risk_reward_ratio),
     entryReferencePrice:
       sig.entry_reference_price !== null && sig.entry_reference_price !== undefined
@@ -1223,6 +1253,11 @@ function mapSignalRow(sig: Record<string, unknown>, livePrice: number | null) {
       sig.actual_result_percent !== null && sig.actual_result_percent !== undefined
         ? Number(sig.actual_result_percent)
         : undefined,
+    closePrice:
+      sig.close_price !== null && sig.close_price !== undefined
+        ? Number(sig.close_price)
+        : undefined,
+    closedAt: sig.closed_at ? String(sig.closed_at) : undefined,
     ambiguityNote: sig.ambiguity_note ? String(sig.ambiguity_note) : undefined,
     explanation: String(sig.explanation || ''),
     createdBy: String(sig.created_by || ''),
@@ -1252,14 +1287,16 @@ export async function listPublicSignals(
 ) {
   return withSupabaseOrLocal(
     async (sb) => {
-      let query = sb.from('signals').select('*').order('created_at', { ascending: false }).limit(100);
+      let query = sb.from('signals').select('*').order('created_at', { ascending: false }).limit(150);
       if (statusFilter === 'ACTIVE') {
         query = query.in('status', ['ACTIVE', 'TP1_HIT', 'TP2_HIT']);
       } else if (statusFilter === 'COMPLETED') {
         query = query.in('status', ['TP3_HIT', 'STOP_LOSS_HIT', 'CANCELLED']);
       }
-      if (sourceFilter === 'ADMIN' || sourceFilter === 'AI') {
-        query = query.eq('source', sourceFilter);
+      if (sourceFilter === 'ADMIN' || sourceFilter === 'MANUAL') {
+        query = query.eq('source', 'ADMIN');
+      } else if (sourceFilter === 'AUTO' || sourceFilter === 'AI') {
+        query = query.in('source', ['AUTO', 'AI']);
       }
 
       const [{ data: signalRows, error: sigErr }, { data: eventRows, error: evErr }] = await Promise.all([
@@ -1284,11 +1321,13 @@ export async function listPublicSignals(
       } else if (statusFilter === 'COMPLETED') {
         rows = rows.filter((s) => ['TP3_HIT', 'STOP_LOSS_HIT', 'CANCELLED'].includes(s.status));
       }
-      if (sourceFilter === 'ADMIN' || sourceFilter === 'AI') {
-        rows = rows.filter((s) => s.source === sourceFilter);
+      if (sourceFilter === 'ADMIN' || sourceFilter === 'MANUAL') {
+        rows = rows.filter((s) => s.source === 'ADMIN');
+      } else if (sourceFilter === 'AUTO' || sourceFilter === 'AI') {
+        rows = rows.filter((s) => s.source === 'AUTO' || s.source === 'AI');
       }
       return {
-        signals: rows.slice(0, 100).map((s) =>
+        signals: rows.slice(0, 150).map((s) =>
           mapSignalRow(s as unknown as Record<string, unknown>, getLivePriceFn(s.symbol)),
         ),
         events: localStore.data.signal_events
@@ -1455,6 +1494,8 @@ export async function runMonitorTick(getPrice: (symbol: string) => number | null
     });
     sig.status = evalRes.nextStatus;
     sig.actual_result_percent = evalRes.resultPercent;
+    sig.close_price = livePrice;
+    sig.closed_at = nowIso;
     if (evalRes.ambiguityNote) sig.ambiguity_note = evalRes.ambiguityNote;
     sig.updated_at = nowIso;
     dirty = true;
@@ -1489,37 +1530,28 @@ export async function runMonitorTick(getPrice: (symbol: string) => number | null
 function evaluateSignalPrice(sig: Record<string, unknown>, livePrice: number) {
   const entryLow = Number(sig.entry_low);
   const entryHigh = Number(sig.entry_high);
-  const refEntry = Number(sig.entry_reference_price) || (entryLow + entryHigh) / 2;
-  const tp1 = Number(sig.tp1);
-  const tp2 = Number(sig.tp2);
-  const tp3 = Number(sig.tp3);
   const stopLoss = Number(sig.stop_loss);
-  const status = String(sig.status) as SignalStatus;
+  const rawDirection = String(sig.direction || '').toUpperCase();
+  const direction: SignalDirection =
+    rawDirection === 'SHORT' || (rawDirection !== 'LONG' && stopLoss > entryHigh) ? 'SHORT' : 'LONG';
 
-  let nextStatus: SignalStatus | null = null;
-  let ambiguityNote: string | undefined;
-
-  const hitStop = livePrice <= stopLoss;
-  const hitTp3 = livePrice >= tp3;
-  const hitTp2 = livePrice >= tp2;
-  const hitTp1 = livePrice >= tp1;
-
-  if (hitStop && (hitTp1 || hitTp2 || hitTp3)) {
-    nextStatus = 'STOP_LOSS_HIT';
-    ambiguityNote = `Ambiguous gap crossing detected at ${livePrice} intersecting both SL (${stopLoss}) and target levels; conservatively resolved to STOP_LOSS_HIT.`;
-  } else if (hitStop) {
-    nextStatus = 'STOP_LOSS_HIT';
-  } else if (hitTp3 && status !== 'TP3_HIT') {
-    nextStatus = 'TP3_HIT';
-  } else if (hitTp2 && (status === 'ACTIVE' || status === 'TP1_HIT')) {
-    nextStatus = 'TP2_HIT';
-  } else if (hitTp1 && status === 'ACTIVE') {
-    nextStatus = 'TP1_HIT';
-  }
-
-  if (!nextStatus || nextStatus === status) return null;
-  const resultPercent = refEntry > 0 ? Number((((livePrice - refEntry) / refEntry) * 100).toFixed(2)) : 0;
-  return { nextStatus, resultPercent, ambiguityNote };
+  return evaluateSignalAgainstPrice(
+    {
+      status: String(sig.status) as SignalStatus,
+      direction,
+      entryLow,
+      entryHigh,
+      entryReferencePrice:
+        sig.entry_reference_price !== null && sig.entry_reference_price !== undefined
+          ? Number(sig.entry_reference_price)
+          : undefined,
+      tp1: Number(sig.tp1),
+      tp2: Number(sig.tp2),
+      tp3: Number(sig.tp3),
+      stopLoss,
+    },
+    livePrice,
+  );
 }
 
 function isAlertTriggered(alert: Record<string, unknown>, livePrice: number): boolean {
@@ -1762,7 +1794,9 @@ export async function createAdminSignal(
   adminUid: string,
   d: {
     symbol: string;
-    source: 'ADMIN' | 'AI';
+    source: SignalSource;
+    tradeType?: SignalTradeType;
+    direction?: SignalDirection;
     timeframe: string;
     entryLow: number;
     entryHigh: number;
@@ -1777,15 +1811,21 @@ export async function createAdminSignal(
   const id = `sig_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
   const nowIso = new Date().toISOString();
   const refEntry = (d.entryLow + d.entryHigh) / 2;
-  const riskRewardRatio = Number(((d.tp2 - refEntry) / (refEntry - d.stopLoss)).toFixed(2));
+  const direction: SignalDirection =
+    d.direction === 'SHORT' || (d.direction !== 'LONG' && d.stopLoss > d.entryHigh) ? 'SHORT' : 'LONG';
+  const risk = direction === 'SHORT' ? d.stopLoss - refEntry : refEntry - d.stopLoss;
+  const reward = direction === 'SHORT' ? refEntry - d.tp2 : d.tp2 - refEntry;
+  const riskRewardRatio = risk > 0 ? Number((Math.abs(reward) / risk).toFixed(2)) : 1;
   const triggerPrice = livePrice ?? refEntry;
+  const tradeType: SignalTradeType = d.tradeType || 'SPOT_BUY';
 
   return withSupabaseOrLocal(
     async (sb) => {
-      const { error: sigErr } = await sb.from('signals').insert({
+      const sbSource = d.source === 'AUTO' ? 'AI' : d.source;
+      const baseInsert: Record<string, unknown> = {
         id,
         symbol: d.symbol,
-        source: d.source,
+        source: sbSource,
         timeframe: d.timeframe,
         status: 'ACTIVE',
         entry_low: d.entryLow,
@@ -1797,10 +1837,12 @@ export async function createAdminSignal(
         risk_reward_ratio: riskRewardRatio,
         entry_reference_price: refEntry,
         explanation: d.explanation,
-        created_by: adminUid,
+        created_by: adminUid === 'system_auto' ? null : adminUid,
         created_at: nowIso,
         updated_at: nowIso,
-      });
+      };
+
+      const { error: sigErr } = await sb.from('signals').insert(baseInsert);
 
       if (sigErr) {
         if (isSupabaseFallbackError(sigErr)) throw sigErr;
@@ -1817,12 +1859,16 @@ export async function createAdminSignal(
         occurred_at: nowIso,
       });
 
-      await recordAdminAuditLog(adminUid, 'PUBLISH_SIGNAL', id, { symbol: d.symbol }, sb);
+      if (adminUid !== 'system_auto') {
+        await recordAdminAuditLog(adminUid, 'PUBLISH_SIGNAL', id, { symbol: d.symbol, source: d.source }, sb);
+      }
       return {
         id,
         symbol: d.symbol,
         source: d.source,
-        timeframe: d.timeframe,
+        tradeType,
+        direction,
+        timeframe: d.timeframe as Timeframe,
         status: 'ACTIVE' as const,
         entryLow: d.entryLow,
         entryHigh: d.entryHigh,
@@ -1843,6 +1889,8 @@ export async function createAdminSignal(
         id,
         symbol: d.symbol,
         source: d.source,
+        trade_type: tradeType,
+        direction,
         timeframe: d.timeframe,
         status: 'ACTIVE',
         entry_low: d.entryLow,
@@ -1869,13 +1917,17 @@ export async function createAdminSignal(
         occurred_at: nowIso,
       });
       localStore.save();
-      await recordAdminAuditLog(adminUid, 'PUBLISH_SIGNAL', id, { symbol: d.symbol });
+      if (adminUid !== 'system_auto') {
+        await recordAdminAuditLog(adminUid, 'PUBLISH_SIGNAL', id, { symbol: d.symbol, source: d.source });
+      }
 
       return {
         id,
         symbol: d.symbol,
         source: d.source,
-        timeframe: d.timeframe,
+        tradeType,
+        direction,
+        timeframe: d.timeframe as Timeframe,
         status: 'ACTIVE' as const,
         entryLow: d.entryLow,
         entryHigh: d.entryHigh,
@@ -1894,56 +1946,347 @@ export async function createAdminSignal(
   );
 }
 
+export async function updateAdminSignal(
+  adminUid: string,
+  signalId: string,
+  patch: {
+    symbol?: string;
+    tradeType?: SignalTradeType;
+    direction?: SignalDirection;
+    timeframe?: string;
+    entryLow?: number;
+    entryHigh?: number;
+    tp1?: number;
+    tp2?: number;
+    tp3?: number;
+    stopLoss?: number;
+    explanation?: string;
+    status?: SignalStatus;
+  },
+  getLivePriceFn: (symbol: string) => number | null,
+) {
+  const nowIso = new Date().toISOString();
+  return withSupabaseOrLocal(
+    async (sb) => {
+      const { data: existing, error: fetchErr } = await sb
+        .from('signals')
+        .select('*')
+        .eq('id', signalId)
+        .maybeSingle();
+      if (fetchErr && isSupabaseFallbackError(fetchErr)) throw fetchErr;
+      if (fetchErr || !existing) return null;
+
+      const entryLow = patch.entryLow ?? Number(existing.entry_low);
+      const entryHigh = patch.entryHigh ?? Number(existing.entry_high);
+      const stopLoss = patch.stopLoss ?? Number(existing.stop_loss);
+      const tp1 = patch.tp1 ?? Number(existing.tp1);
+      const tp2 = patch.tp2 ?? Number(existing.tp2);
+      const tp3 = patch.tp3 ?? Number(existing.tp3);
+      const refEntry = (entryLow + entryHigh) / 2;
+      const direction: SignalDirection =
+        patch.direction ?? (stopLoss > entryHigh ? 'SHORT' : 'LONG');
+      const risk = direction === 'SHORT' ? stopLoss - refEntry : refEntry - stopLoss;
+      const reward = direction === 'SHORT' ? refEntry - tp2 : tp2 - refEntry;
+      const riskRewardRatio = risk > 0 ? Number((Math.abs(reward) / risk).toFixed(2)) : Number(existing.risk_reward_ratio);
+      const nextStatus = patch.status ?? (String(existing.status) as SignalStatus);
+      const nextSymbol = patch.symbol ?? String(existing.symbol);
+
+      const updateFields: Record<string, unknown> = {
+        symbol: nextSymbol,
+        timeframe: patch.timeframe ?? existing.timeframe,
+        entry_low: entryLow,
+        entry_high: entryHigh,
+        tp1,
+        tp2,
+        tp3,
+        stop_loss: stopLoss,
+        entry_reference_price: refEntry,
+        risk_reward_ratio: riskRewardRatio,
+        explanation: patch.explanation ?? existing.explanation,
+        status: nextStatus,
+        updated_at: nowIso,
+      };
+
+      const { data: updated, error: updErr } = await sb
+        .from('signals')
+        .update(updateFields)
+        .eq('id', signalId)
+        .select('*')
+        .single();
+      if (updErr) {
+        if (isSupabaseFallbackError(updErr)) throw updErr;
+        throw new Error(updErr.message);
+      }
+
+      await recordAdminAuditLog(adminUid, 'UPDATE_SIGNAL', signalId, { symbol: nextSymbol }, sb);
+      return mapSignalRow(updated, getLivePriceFn(nextSymbol));
+    },
+    async () => {
+      const sig = localStore.data.signals.find((s) => s.id === signalId);
+      if (!sig) return null;
+
+      if (patch.symbol) sig.symbol = patch.symbol;
+      if (patch.tradeType) sig.trade_type = patch.tradeType;
+      if (patch.direction) sig.direction = patch.direction;
+      if (patch.timeframe) sig.timeframe = patch.timeframe;
+      if (patch.entryLow !== undefined) sig.entry_low = patch.entryLow;
+      if (patch.entryHigh !== undefined) sig.entry_high = patch.entryHigh;
+      if (patch.tp1 !== undefined) sig.tp1 = patch.tp1;
+      if (patch.tp2 !== undefined) sig.tp2 = patch.tp2;
+      if (patch.tp3 !== undefined) sig.tp3 = patch.tp3;
+      if (patch.stopLoss !== undefined) sig.stop_loss = patch.stopLoss;
+      if (patch.explanation !== undefined) sig.explanation = patch.explanation;
+      if (patch.status !== undefined) {
+        sig.status = patch.status;
+        if (patch.status === 'ACTIVE') {
+          sig.closed_at = null;
+          sig.close_price = null;
+          sig.actual_result_percent = null;
+        }
+      }
+
+      const refEntry = (sig.entry_low + sig.entry_high) / 2;
+      const dir: SignalDirection =
+        sig.direction === 'SHORT' || sig.stop_loss > sig.entry_high ? 'SHORT' : 'LONG';
+      sig.direction = dir;
+      const risk = dir === 'SHORT' ? sig.stop_loss - refEntry : refEntry - sig.stop_loss;
+      const reward = dir === 'SHORT' ? refEntry - sig.tp2 : sig.tp2 - refEntry;
+      sig.entry_reference_price = refEntry;
+      if (risk > 0) {
+        sig.risk_reward_ratio = Number((Math.abs(reward) / risk).toFixed(2));
+      }
+      sig.updated_at = nowIso;
+      localStore.save();
+      await recordAdminAuditLog(adminUid, 'UPDATE_SIGNAL', signalId, { symbol: sig.symbol });
+      return mapSignalRow(sig as unknown as Record<string, unknown>, getLivePriceFn(sig.symbol));
+    },
+  );
+}
+
+export async function updateAdminSignalStatus(
+  adminUid: string,
+  signalId: string,
+  nextStatus: SignalStatus,
+  getLivePriceFn: (symbol: string) => number | null,
+) {
+  const nowIso = new Date().toISOString();
+
+  const resolveClosePrice = (sig: {
+    symbol: string;
+    tp1: number;
+    tp2: number;
+    tp3: number;
+    stop_loss: number;
+    entry_low: number;
+    entry_high: number;
+  }) => {
+    const live = getLivePriceFn(sig.symbol);
+    if (live && live > 0) return live;
+    if (nextStatus === 'TP1_HIT') return sig.tp1;
+    if (nextStatus === 'TP2_HIT') return sig.tp2;
+    if (nextStatus === 'TP3_HIT') return sig.tp3;
+    if (nextStatus === 'STOP_LOSS_HIT') return sig.stop_loss;
+    return (sig.entry_low + sig.entry_high) / 2;
+  };
+
+  return withSupabaseOrLocal(
+    async (sb) => {
+      const { data: sigRow, error: fetchErr } = await sb
+        .from('signals')
+        .select('*')
+        .eq('id', signalId)
+        .maybeSingle();
+      if (fetchErr && isSupabaseFallbackError(fetchErr)) throw fetchErr;
+      if (fetchErr || !sigRow) return null;
+
+      const refEntry = Number(sigRow.entry_reference_price) || (Number(sigRow.entry_low) + Number(sigRow.entry_high)) / 2;
+      const triggerPrice = resolveClosePrice({
+        symbol: String(sigRow.symbol),
+        tp1: Number(sigRow.tp1),
+        tp2: Number(sigRow.tp2),
+        tp3: Number(sigRow.tp3),
+        stop_loss: Number(sigRow.stop_loss),
+        entry_low: Number(sigRow.entry_low),
+        entry_high: Number(sigRow.entry_high),
+      });
+      const dir: SignalDirection =
+        Number(sigRow.stop_loss) > Number(sigRow.entry_high) ? 'SHORT' : 'LONG';
+      const resultPercent =
+        nextStatus === 'ACTIVE'
+          ? null
+          : computeSignalResultPercent(dir, refEntry, triggerPrice);
+
+      const { data: updated, error: updErr } = await sb
+        .from('signals')
+        .update({
+          status: nextStatus,
+          actual_result_percent: resultPercent,
+          updated_at: nowIso,
+        })
+        .eq('id', signalId)
+        .select('*')
+        .single();
+      if (updErr) {
+        if (isSupabaseFallbackError(updErr)) throw updErr;
+        throw new Error(updErr.message);
+      }
+
+      if (nextStatus !== 'ACTIVE') {
+        await sb.from('signal_events').upsert({
+          id: `${signalId}_${nextStatus}`,
+          signal_id: signalId,
+          symbol: sigRow.symbol,
+          event_type: nextStatus,
+          trigger_price: triggerPrice,
+          result_percent: resultPercent ?? 0,
+          occurred_at: nowIso,
+        });
+      }
+
+      await recordAdminAuditLog(adminUid, 'UPDATE_SIGNAL_STATUS', signalId, { status: nextStatus }, sb);
+      return mapSignalRow(updated, getLivePriceFn(String(sigRow.symbol)));
+    },
+    async () => {
+      const sig = localStore.data.signals.find((s) => s.id === signalId);
+      if (!sig) return null;
+
+      const refEntry = sig.entry_reference_price || (sig.entry_low + sig.entry_high) / 2;
+      const triggerPrice = resolveClosePrice(sig);
+      const dir: SignalDirection =
+        sig.direction === 'SHORT' || sig.stop_loss > sig.entry_high ? 'SHORT' : 'LONG';
+      const resultPercent =
+        nextStatus === 'ACTIVE'
+          ? null
+          : computeSignalResultPercent(dir, refEntry, triggerPrice);
+
+      sig.status = nextStatus;
+      sig.actual_result_percent = resultPercent;
+      sig.close_price = nextStatus === 'ACTIVE' ? null : triggerPrice;
+      sig.closed_at = nextStatus === 'ACTIVE' ? null : nowIso;
+      sig.updated_at = nowIso;
+
+      if (nextStatus !== 'ACTIVE' && !localStore.data.signal_events.some((e) => e.id === `${signalId}_${nextStatus}`)) {
+        localStore.data.signal_events.unshift({
+          id: `${signalId}_${nextStatus}`,
+          signal_id: signalId,
+          symbol: sig.symbol,
+          event_type: nextStatus,
+          trigger_price: triggerPrice,
+          result_percent: resultPercent ?? 0,
+          occurred_at: nowIso,
+        });
+      }
+
+      localStore.save();
+      await recordAdminAuditLog(adminUid, 'UPDATE_SIGNAL_STATUS', signalId, { status: nextStatus });
+      return mapSignalRow(sig as unknown as Record<string, unknown>, getLivePriceFn(sig.symbol));
+    },
+  );
+}
+
+export async function deleteAdminSignal(adminUid: string, signalId: string): Promise<boolean> {
+  return withSupabaseOrLocal(
+    async (sb) => {
+      await sb.from('signal_events').delete().eq('signal_id', signalId);
+      const { data, error } = await sb.from('signals').delete().eq('id', signalId).select('id');
+      if (error) {
+        if (isSupabaseFallbackError(error)) throw error;
+        throw new Error(error.message);
+      }
+      if (!data || data.length === 0) return false;
+      await recordAdminAuditLog(adminUid, 'DELETE_SIGNAL', signalId, undefined, sb);
+      return true;
+    },
+    async () => {
+      const idx = localStore.data.signals.findIndex((s) => s.id === signalId);
+      if (idx === -1) return false;
+      localStore.data.signals.splice(idx, 1);
+      localStore.data.signal_events = localStore.data.signal_events.filter((e) => e.signal_id !== signalId);
+      localStore.save();
+      await recordAdminAuditLog(adminUid, 'DELETE_SIGNAL', signalId);
+      return true;
+    },
+  );
+}
+
 export async function cancelAdminSignal(
   adminUid: string,
   signalId: string,
   getLivePriceFn: (symbol: string) => number | null,
 ): Promise<boolean> {
-  const nowIso = new Date().toISOString();
-  return withSupabaseOrLocal(
-    async (sb) => {
-      const { data: sigRow, error: fetchErr } = await sb
-        .from('signals')
-        .select('id, symbol')
-        .eq('id', signalId)
-        .maybeSingle();
-      if (fetchErr && isSupabaseFallbackError(fetchErr)) throw fetchErr;
-      if (fetchErr || !sigRow) return false;
+  const updated = await updateAdminSignalStatus(adminUid, signalId, 'CANCELLED', getLivePriceFn);
+  return Boolean(updated);
+}
 
-      await sb.from('signals').update({ status: 'CANCELLED', updated_at: nowIso }).eq('id', signalId);
-      await sb.from('signal_events').upsert({
-        id: `${signalId}_CANCELLED`,
-        signal_id: signalId,
-        symbol: sigRow.symbol,
-        event_type: 'CANCELLED',
-        trigger_price: getLivePriceFn(sigRow.symbol) ?? 0,
-        result_percent: 0,
-        occurred_at: nowIso,
-      });
-      await recordAdminAuditLog(adminUid, 'CANCEL_SIGNAL', signalId, undefined, sb);
-      return true;
-    },
-    async () => {
-      const sig = localStore.data.signals.find((s) => s.id === signalId);
-      if (!sig) return false;
-      sig.status = 'CANCELLED';
-      sig.updated_at = nowIso;
-      if (!localStore.data.signal_events.some((e) => e.id === `${signalId}_CANCELLED`)) {
-        localStore.data.signal_events.unshift({
-          id: `${signalId}_CANCELLED`,
-          signal_id: signalId,
-          symbol: sig.symbol,
-          event_type: 'CANCELLED',
-          trigger_price: getLivePriceFn(sig.symbol) ?? 0,
-          result_percent: 0,
-          occurred_at: nowIso,
-        });
-      }
-      localStore.save();
-      await recordAdminAuditLog(adminUid, 'CANCEL_SIGNAL', signalId);
-      return true;
-    },
-  );
+export function getAutoSignalsConfig(): AutoSignalsConfig {
+  const row = localStore.data.auto_signals_config || createDefaultAutoSignalsConfigRow();
+  return {
+    enabled: Boolean(row.enabled),
+    timeframe: row.timeframe || '1h',
+    cooldownMinutes: Number(row.cooldown_minutes || 120),
+    maxActiveSignals: Number(row.max_active_signals || 6),
+    minQuoteVolumeUsdt: Number(row.min_quote_volume_usdt || 10_000_000),
+    lastScanAt: row.last_scan_at || null,
+    lastScanSummary: row.last_scan_summary || '',
+    updatedAt: row.updated_at || new Date().toISOString(),
+  };
+}
+
+export async function updateAutoSignalsConfig(
+  adminUid: string | null,
+  patch: Partial<{
+    enabled: boolean;
+    timeframe: Timeframe;
+    cooldownMinutes: number;
+    maxActiveSignals: number;
+    minQuoteVolumeUsdt: number;
+    lastScanAt: string | null;
+    lastScanSummary: string;
+  }>,
+): Promise<AutoSignalsConfig> {
+  const current = localStore.data.auto_signals_config || createDefaultAutoSignalsConfigRow();
+  const nowIso = new Date().toISOString();
+  localStore.data.auto_signals_config = {
+    enabled: patch.enabled !== undefined ? patch.enabled : current.enabled,
+    timeframe: patch.timeframe ?? current.timeframe,
+    cooldown_minutes: patch.cooldownMinutes ?? current.cooldown_minutes,
+    max_active_signals: patch.maxActiveSignals ?? current.max_active_signals,
+    min_quote_volume_usdt: patch.minQuoteVolumeUsdt ?? current.min_quote_volume_usdt,
+    last_scan_at: patch.lastScanAt !== undefined ? patch.lastScanAt : current.last_scan_at,
+    last_scan_summary:
+      patch.lastScanSummary !== undefined ? patch.lastScanSummary : current.last_scan_summary,
+    updated_at: nowIso,
+  };
+  localStore.save();
+
+  if (adminUid && adminUid !== 'system_auto') {
+    await recordAdminAuditLog(adminUid, 'UPDATE_AUTO_SIGNALS_CONFIG', 'auto_signals', patch as Record<string, unknown>);
+  }
+
+  return getAutoSignalsConfig();
+}
+
+export async function getAutoSignalSnapshotForCooldown(): Promise<{
+  activeAutoCount: number;
+  recentOrActiveAutoSymbols: Set<string>;
+}> {
+  const cfg = getAutoSignalsConfig();
+  const cutoffIso = new Date(Date.now() - cfg.cooldownMinutes * 60 * 1000).toISOString();
+  const res = await listPublicSignals('ALL', 'AUTO', () => null);
+  const blocked = new Set<string>();
+  let activeAutoCount = 0;
+
+  for (const sig of res.signals) {
+    const isActive = ['ACTIVE', 'TP1_HIT', 'TP2_HIT'].includes(sig.status);
+    if (isActive) {
+      activeAutoCount++;
+      blocked.add(sig.symbol.toUpperCase());
+    } else if (sig.createdAt >= cutoffIso) {
+      blocked.add(sig.symbol.toUpperCase());
+    }
+  }
+
+  return { activeAutoCount, recentOrActiveAutoSymbols: blocked };
 }
 
 export async function broadcastAdminAnnouncement(adminUid: string, title: string, message: string): Promise<number> {

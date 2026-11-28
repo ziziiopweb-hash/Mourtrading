@@ -167,10 +167,18 @@ export type SignalStatus =
   | 'STOP_LOSS_HIT'
   | 'CANCELLED';
 
+export type SignalSource = 'ADMIN' | 'AUTO' | 'AI';
+
+export type SignalTradeType = 'SPOT_BUY' | 'SPOT_SCALP' | 'SPOT_SWING';
+
+export type SignalDirection = 'LONG' | 'SHORT';
+
 export interface TradingSignal {
   id: string;
   symbol: string;
-  source: 'ADMIN' | 'AI';
+  source: SignalSource;
+  tradeType?: SignalTradeType;
+  direction?: SignalDirection;
   timeframe: Timeframe;
   status: SignalStatus;
   entryLow: number;
@@ -183,9 +191,22 @@ export interface TradingSignal {
   explanation: string;
   entryReferencePrice?: number;
   actualResultPercent?: number;
+  closePrice?: number;
+  closedAt?: string;
   ambiguityNote?: string;
   createdBy: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutoSignalsConfig {
+  enabled: boolean;
+  timeframe: Timeframe;
+  cooldownMinutes: number;
+  maxActiveSignals: number;
+  minQuoteVolumeUsdt: number;
+  lastScanAt: string | null;
+  lastScanSummary?: string;
   updatedAt: string;
 }
 

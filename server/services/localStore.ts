@@ -1,6 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AiAnalysisReport, SignalStatus } from '../../src/types/trading.ts';
+import type {
+  AiAnalysisReport,
+  SignalDirection,
+  SignalSource,
+  SignalStatus,
+  SignalTradeType,
+  Timeframe,
+} from '../../src/types/trading.ts';
 
 export interface LocalUserProfileRow {
   id: string;
@@ -90,7 +97,9 @@ export interface LocalAnalysisRow {
 export interface LocalSignalRow {
   id: string;
   symbol: string;
-  source: 'ADMIN' | 'AI';
+  source: SignalSource;
+  trade_type?: SignalTradeType;
+  direction?: SignalDirection;
   timeframe: string;
   status: SignalStatus;
   entry_low: number;
@@ -102,10 +111,23 @@ export interface LocalSignalRow {
   risk_reward_ratio: number;
   entry_reference_price?: number | null;
   actual_result_percent?: number | null;
+  close_price?: number | null;
+  closed_at?: string | null;
   ambiguity_note?: string | null;
   explanation: string;
   created_by: string;
   created_at: string;
+  updated_at: string;
+}
+
+export interface LocalAutoSignalsConfigRow {
+  enabled: boolean;
+  timeframe: Timeframe;
+  cooldown_minutes: number;
+  max_active_signals: number;
+  min_quote_volume_usdt: number;
+  last_scan_at: string | null;
+  last_scan_summary?: string;
   updated_at: string;
 }
 
@@ -161,6 +183,7 @@ interface LocalDatabaseSnapshot {
   signals: LocalSignalRow[];
   signal_events: LocalSignalEventRow[];
   app_config: LocalAppConfigRow;
+  auto_signals_config: LocalAutoSignalsConfigRow;
   admin_audit_logs: LocalAuditLogRow[];
   auth_failure_logs: LocalAuthFailureRow[];
 }
@@ -193,6 +216,19 @@ export function createDefaultAppConfigRow(): LocalAppConfigRow {
   };
 }
 
+export function createDefaultAutoSignalsConfigRow(): LocalAutoSignalsConfigRow {
+  return {
+    enabled: false,
+    timeframe: '1h',
+    cooldown_minutes: 120,
+    max_active_signals: 6,
+    min_quote_volume_usdt: 10_000_000,
+    last_scan_at: null,
+    last_scan_summary: '',
+    updated_at: new Date().toISOString(),
+  };
+}
+
 function createEmptySnapshot(): LocalDatabaseSnapshot {
   return {
     user_profiles: [],
@@ -206,6 +242,7 @@ function createEmptySnapshot(): LocalDatabaseSnapshot {
     signals: [],
     signal_events: [],
     app_config: createDefaultAppConfigRow(),
+    auto_signals_config: createDefaultAutoSignalsConfigRow(),
     admin_audit_logs: [],
     auth_failure_logs: [],
   };
@@ -239,6 +276,9 @@ class LocalStore {
           signals: Array.isArray(parsed.signals) ? parsed.signals : base.signals,
           signal_events: Array.isArray(parsed.signal_events) ? parsed.signal_events : base.signal_events,
           app_config: parsed.app_config?.id === 'global' ? parsed.app_config : base.app_config,
+          auto_signals_config: parsed.auto_signals_config
+            ? { ...base.auto_signals_config, ...parsed.auto_signals_config }
+            : base.auto_signals_config,
           admin_audit_logs: Array.isArray(parsed.admin_audit_logs) ? parsed.admin_audit_logs : base.admin_audit_logs,
           auth_failure_logs: Array.isArray(parsed.auth_failure_logs) ? parsed.auth_failure_logs : base.auth_failure_logs,
         };

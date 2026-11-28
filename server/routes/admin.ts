@@ -11,14 +11,20 @@ import {
   broadcastAdminAnnouncement,
   cancelAdminSignal,
   createAdminSignal,
+  deleteAdminSignal,
   exportAdminSnapshot,
   getAdminOverviewStats,
+  getAutoSignalsConfig,
   getGlobalAppConfig,
   listAdminAuditLogs,
   listAdminUsers,
+  updateAdminSignal,
+  updateAdminSignalStatus,
   updateAdminUser,
+  updateAutoSignalsConfig,
   updateGlobalAppConfig,
 } from '../services/dataStore.ts';
+import { roundSignalPrice } from '../../src/lib/autoSignalScanner.ts';
 import { isGeminiConfigured } from '../config/env.ts';
 
 const router = Router();
@@ -26,16 +32,41 @@ const router = Router();
 router.use(requireAdmin);
 
 const createSignalSchema = z.object({
-  symbol: z.string().trim().min(4).max(20).regex(/^[A-Za-z0-9]+$/).transform((s) => s.toUpperCase()),
+  symbol: z.string().trim().min(3).max(20).regex(/^[A-Za-z0-9]+$/).transform((s) => s.toUpperCase()),
+  tradeType: z.enum(['SPOT_BUY', 'SPOT_SCALP', 'SPOT_SWING']).optional().default('SPOT_BUY'),
+  direction: z.enum(['LONG', 'SHORT']).optional().default('LONG'),
   timeframe: z.enum(['1m', '5m', '15m', '1h', '4h', '1d', '1w']),
   entryLow: z.number().positive(),
-  entryHigh: z.number().positive(),
+  entryHigh: z.number().positive().optional(),
   tp1: z.number().positive(),
-  tp2: z.number().positive(),
-  tp3: z.number().positive(),
+  tp2: z.number().positive().optional(),
+  tp3: z.number().positive().optional(),
   stopLoss: z.number().positive(),
-  explanation: z.string().trim().min(10).max(4000),
-  source: z.enum(['ADMIN', 'AI']).optional().default('ADMIN'),
+  explanation: z.string().trim().max(4000).optional().default(''),
+  source: z.enum(['ADMIN', 'AUTO', 'AI']).optional().default('ADMIN'),
+});
+
+const updateSignalSchema = z.object({
+  symbol: z.string().trim().min(3).max(20).regex(/^[A-Za-z0-9]+$/).transform((s) => s.toUpperCase()).optional(),
+  tradeType: z.enum(['SPOT_BUY', 'SPOT_SCALP', 'SPOT_SWING']).optional(),
+  direction: z.enum(['LONG', 'SHORT']).optional(),
+  timeframe: z.enum(['1m', '5m', '15m', '1h', '4h', '1d', '1w']).optional(),
+  entryLow: z.number().positive().optional(),
+  entryHigh: z.number().positive().optional(),
+  tp1: z.number().positive().optional(),
+  tp2: z.number().positive().optional(),
+  tp3: z.number().positive().optional(),
+  stopLoss: z.number().positive().optional(),
+  explanation: z.string().trim().max(4000).optional(),
+  status: z.enum(['ACTIVE', 'TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'STOP_LOSS_HIT', 'CANCELLED']).optional(),
+});
+
+const autoSignalsSchema = z.object({
+  enabled: z.boolean().optional(),
+  timeframe: z.enum(['1m', '5m', '15m', '1h', '4h', '1d', '1w']).optional(),
+  cooldownMinutes: z.number().int().min(10).max(1440).optional(),
+  maxActiveSignals: z.number().int().min(1).max(30).optional(),
+  minQuoteVolumeUsdt: z.number().nonnegative().optional(),
 });
 
 const updateUserSchema = z.object({
@@ -125,20 +156,122 @@ router.post('/signals', async (req, res) => {
     return;
   }
   const d = parsed.data;
-  if (d.stopLoss >= d.entryLow || d.tp1 <= d.entryHigh || d.tp2 <= d.tp1 || d.tp3 <= d.tp2) {
-    res.status(400).json({
-      error: 'Invalid Spot level ordering: require stopLoss < entryLow <= entryHigh < tp1 < tp2 < tp3',
-    });
-    return;
+  const entryLow = Math.min(d.entryLow, d.entryHigh ?? d.entryLow);
+  const entryHigh = Math.max(d.entryLow, d.entryHigh ?? d.entryLow);
+  const refEntry = (entryLow + entryHigh) / 2;
+  const direction = d.direction === 'SHORT' || d.stopLoss > entryHigh ? 'SHORT' : 'LONG';
+  const tp1 = d.tp1;
+  let tp2: number;
+  let tp3: number;
+
+  if (direction === 'SHORT') {
+    const risk = Math.max(d.stopLoss - refEntry, refEntry * 0.01);
+    tp2 = d.tp2 && d.tp2 < tp1 ? d.tp2 : roundSignalPrice(Math.max(tp1 - risk * 0.9, tp1 * 0.985));
+    tp3 = d.tp3 && d.tp3 < tp2 ? d.tp3 : roundSignalPrice(Math.max(tp2 - risk * 1.1, tp2 * 0.98));
+    if (d.stopLoss <= entryHigh || tp1 >= entryLow || tp2 >= tp1 || tp3 >= tp2 || tp3 <= 0) {
+      res.status(400).json({
+        error: 'Invalid SHORT level ordering: require tp3 < tp2 < tp1 < entryLow <= entryHigh < stopLoss',
+      });
+      return;
+    }
+  } else {
+    const risk = Math.max(refEntry - d.stopLoss, refEntry * 0.01);
+    tp2 = d.tp2 && d.tp2 > tp1 ? d.tp2 : roundSignalPrice(tp1 + risk * 0.9);
+    tp3 = d.tp3 && d.tp3 > tp2 ? d.tp3 : roundSignalPrice(tp2 + risk * 1.1);
+    if (d.stopLoss >= entryLow || tp1 <= entryHigh || tp2 <= tp1 || tp3 <= tp2) {
+      res.status(400).json({
+        error: 'Invalid LONG/Spot level ordering: require stopLoss < entryLow <= entryHigh < tp1 < tp2 < tp3',
+      });
+      return;
+    }
   }
 
+  const explanation = d.explanation || `صفقة ${direction === 'SHORT' ? 'بيع (Short)' : 'شراء (Spot)'} منشورة يدوياً على ${d.symbol}`;
+
   try {
-    const refEntry = (d.entryLow + d.entryHigh) / 2;
     const livePrice = binanceMarket.getLivePrice(d.symbol) ?? refEntry;
-    const signal = await createAdminSignal(req.authUser!.uid, d, livePrice);
+    const signal = await createAdminSignal(
+      req.authUser!.uid,
+      {
+        symbol: d.symbol,
+        tradeType: d.tradeType,
+        direction,
+        timeframe: d.timeframe,
+        entryLow,
+        entryHigh,
+        tp1,
+        tp2,
+        tp3,
+        stopLoss: d.stopLoss,
+        explanation,
+        source: d.source,
+      },
+      livePrice,
+    );
     res.status(201).json({ signal });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to publish signal' });
+  }
+});
+
+router.patch('/signals/:id', async (req, res) => {
+  const signalId = String(req.params.id || '');
+  const parsed = updateSignalSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid signal update' });
+    return;
+  }
+  try {
+    const updated = await updateAdminSignal(req.authUser!.uid, signalId, parsed.data, (sym) =>
+      binanceMarket.getLivePrice(sym),
+    );
+    if (!updated) {
+      res.status(404).json({ error: 'Signal not found' });
+      return;
+    }
+    res.json({ signal: updated });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to update signal' });
+  }
+});
+
+router.patch('/signals/:id/status', async (req, res) => {
+  const signalId = String(req.params.id || '');
+  const statusParsed = z
+    .enum(['ACTIVE', 'TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'STOP_LOSS_HIT', 'CANCELLED'])
+    .safeParse(req.body?.status);
+  if (!statusParsed.success) {
+    res.status(400).json({ error: 'Invalid signal status' });
+    return;
+  }
+  try {
+    const updated = await updateAdminSignalStatus(
+      req.authUser!.uid,
+      signalId,
+      statusParsed.data,
+      (sym) => binanceMarket.getLivePrice(sym),
+    );
+    if (!updated) {
+      res.status(404).json({ error: 'Signal not found' });
+      return;
+    }
+    res.json({ signal: updated });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to update signal status' });
+  }
+});
+
+router.delete('/signals/:id', async (req, res) => {
+  const signalId = String(req.params.id || '');
+  try {
+    const deleted = await deleteAdminSignal(req.authUser!.uid, signalId);
+    if (!deleted) {
+      res.status(404).json({ error: 'Signal not found' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to delete signal' });
   }
 });
 
@@ -155,6 +288,33 @@ router.patch('/signals/:id/cancel', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to cancel signal' });
+  }
+});
+
+router.get('/auto-signals', (_req, res) => {
+  res.json({ config: getAutoSignalsConfig() });
+});
+
+router.put('/auto-signals', async (req, res) => {
+  const parsed = autoSignalsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid auto signals config' });
+    return;
+  }
+  try {
+    const config = await updateAutoSignalsConfig(req.authUser!.uid, parsed.data);
+    res.json({ config });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to save auto signals config' });
+  }
+});
+
+router.post('/auto-signals/scan', async (_req, res) => {
+  try {
+    const result = await monitorEngine.scanAutoSignalsOnce(true);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Auto signals scan failed' });
   }
 });
 
