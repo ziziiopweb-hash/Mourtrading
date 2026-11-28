@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Download, PlusSquare, Share, Smartphone, WifiOff, X } from 'lucide-react';
+import { CheckCircle2, Download, PlusSquare, Share, WifiOff, X } from 'lucide-react';
 import { useApp } from '../contexts/AppContext.tsx';
 import { useOnlineStatus, usePWAInstall } from '../hooks/usePWAInstall.ts';
 
@@ -23,9 +23,11 @@ function InstallInstructionsModal({
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-[#D4AF37]/15 border border-[#D4AF37]/35 flex items-center justify-center shrink-0">
-              <Smartphone className="w-4 h-4 text-[#D4AF37]" />
-            </div>
+            <img
+              src="/icon-192.png"
+              alt="MouriTrading"
+              className="w-10 h-10 rounded-xl object-cover shrink-0 border border-[#D4AF37]/40"
+            />
             <div>
               <h3 className="text-sm font-bold text-[#F8FAFC]">
                 {isIOS
@@ -130,7 +132,7 @@ export function PWAInstallBanner() {
             <img
               src="/icon-192.png"
               alt="MouriTrading"
-              className="w-7 h-7 rounded-lg shrink-0 border border-[#D4AF37]/30"
+              className="w-9 h-9 rounded-xl object-cover shrink-0 border border-[#D4AF37]/40"
             />
             <div className="min-w-0">
               <div className="text-xs font-bold text-[#F8FAFC] truncate">
@@ -226,9 +228,11 @@ export function PWAProfileInstallCard() {
     <>
       <div className="bg-[#0D131F] border border-[#D4AF37]/30 rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#D4AF37]/12 border border-[#D4AF37]/30 flex items-center justify-center shrink-0">
-            <Smartphone className="w-5 h-5 text-[#D4AF37]" />
-          </div>
+          <img
+            src="/icon-192.png"
+            alt="MouriTrading"
+            className="w-10 h-10 rounded-xl object-cover shrink-0 border border-[#D4AF37]/40"
+          />
           <div className="space-y-0.5">
             <h2 className="text-sm font-bold text-[#F8FAFC]">
               {isAr ? 'تثبيت التطبيق على الهاتف' : 'Install App on Phone'}

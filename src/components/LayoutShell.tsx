@@ -150,17 +150,17 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
       {/* Main Column */}
       <div className="flex-1 flex flex-col min-w-0 pb-16 lg:pb-0">
         {/* Top Bar (Clean 3-Zone Contract) */}
-        <header className="sticky top-0 z-30 h-14 lg:h-16 bg-[#070A0F]/90 backdrop-blur-md border-b border-white/8 px-4 lg:px-6 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
+        <header className="sticky top-0 z-30 h-14 lg:h-16 bg-[#070A0F]/90 backdrop-blur-md border-b border-white/8 px-3 sm:px-4 lg:px-6 flex items-center justify-between gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 shrink-0">
             <button
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-slate-300 hover:bg-white/5 cursor-pointer"
+              className="lg:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg text-slate-300 hover:bg-white/5 cursor-pointer shrink-0"
               aria-label="Open menu"
             >
               <Menu className="w-5 h-5" />
             </button>
-            <div className="lg:hidden">
-              <button onClick={() => go('/')} className="cursor-pointer">
+            <div className="lg:hidden shrink-0">
+              <button onClick={() => go('/')} className="cursor-pointer flex items-center shrink-0">
                 <MourLogo />
               </button>
             </div>
@@ -175,10 +175,10 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             <button
               onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')}
-              className="min-h-[38px] px-3 py-1.5 rounded-lg border border-white/10 bg-[#0D131F] text-xs font-medium text-slate-200 hover:border-[#D4AF37]/40 flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              className="min-h-[36px] sm:min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-lg border border-white/10 bg-[#0D131F] text-xs font-medium text-slate-200 hover:border-[#D4AF37]/40 flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Globe className="w-3.5 h-3.5 text-[#D4AF37]" />
               <span>{language === 'ar' ? 'EN' : 'العربية'}</span>
@@ -188,7 +188,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
               <>
                 <button
                   onClick={() => go('/notifications')}
-                  className="relative min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg border border-white/10 bg-[#0D131F] text-slate-300 hover:text-[#E5C158] cursor-pointer"
+                  className="relative min-h-[36px] min-w-[36px] sm:min-h-[38px] sm:min-w-[38px] flex items-center justify-center rounded-lg border border-white/10 bg-[#0D131F] text-slate-300 hover:text-[#E5C158] cursor-pointer shrink-0"
                   aria-label={t.nav.notifications}
                 >
                   <Bell className="w-4 h-4" />
@@ -200,11 +200,11 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 </button>
                 {clerkActive && (
                   <Show when="signed-in">
-                    <div className="flex items-center">
+                    <div className="flex items-center shrink-0">
                       <UserButton
                         appearance={{
                           elements: {
-                            avatarBox: 'w-9 h-9 border border-[#D4AF37]/40',
+                            avatarBox: 'w-8 h-8 sm:w-9 sm:h-9 border border-[#D4AF37]/40',
                           },
                         }}
                       />
@@ -213,16 +213,17 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 )}
                 <button
                   onClick={logout}
-                  className="inline-flex min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-lg border border-white/10 bg-[#0D131F] text-xs font-medium text-slate-300 hover:text-white items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                  aria-label={t.nav.logout}
+                  className="inline-flex min-h-[36px] sm:min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-lg border border-white/10 bg-[#0D131F] text-xs font-medium text-slate-300 hover:text-white items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5" />
-                  <span>{t.nav.logout}</span>
+                  <span className="hidden sm:inline">{t.nav.logout}</span>
                 </button>
               </>
             ) : (
               <button
                 onClick={() => openClerkSignIn()}
-                className="min-h-[38px] px-4 py-1.5 rounded-lg bg-[#D4AF37] hover:bg-[#E5C158] text-[#070A0F] text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                className="min-h-[36px] sm:min-h-[38px] px-3 sm:px-4 py-1.5 rounded-lg bg-[#D4AF37] hover:bg-[#E5C158] text-[#070A0F] text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
               >
                 {t.nav.login}
               </button>
