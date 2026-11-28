@@ -33,6 +33,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     navigate,
     user,
     clerkActive,
+    openClerkSignIn,
     logout,
     wsConnected,
     unreadCount,
@@ -220,7 +221,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
               </>
             ) : (
               <button
-                onClick={() => go('/login')}
+                onClick={() => openClerkSignIn()}
                 className="min-h-[38px] px-4 py-1.5 rounded-lg bg-[#D4AF37] hover:bg-[#E5C158] text-[#070A0F] text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
               >
                 {t.nav.login}

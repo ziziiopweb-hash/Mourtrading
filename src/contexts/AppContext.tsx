@@ -1,12 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { ClerkFailed, ClerkProvider, useAuth, useUser } from '@clerk/react';
+import { ClerkFailed, ClerkProvider, useAuth, useClerk, useUser } from '@clerk/react';
 import { apiFetch, registerIdTokenGetter } from '../lib/api.ts';
 import {
   BINANCE_PUBLIC_WS_URLS,
   fetchDirectBinanceTickers,
   formatMarketFeedError,
 } from '../lib/binancePublic.ts';
-import { configurePublicSupabaseClient, supabase } from '../lib/supabase.ts';
 import { getT } from '../i18n/translations.ts';
 import type {
   AppNotification,
@@ -16,44 +15,8 @@ import type {
   UserProfile,
 } from '../types/trading.ts';
 
-const LOCAL_SUPABASE_PROFILE_KEY = 'mour_supabase_profile';
-
-interface CachedSupabaseProfile {
-  uid: string;
-  email: string;
-  displayName: string;
-}
-
-function readCachedSupabaseProfile(): CachedSupabaseProfile | null {
-  try {
-    const raw = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_SUPABASE_PROFILE_KEY) : null;
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<CachedSupabaseProfile>;
-    if (typeof parsed.uid === 'string' && typeof parsed.email === 'string') {
-      return {
-        uid: parsed.uid,
-        email: parsed.email,
-        displayName: typeof parsed.displayName === 'string' ? parsed.displayName : '',
-      };
-    }
-  } catch {
-    // Ignore sandboxed storage restriction
-  }
-  return null;
-}
-
-function writeCachedSupabaseProfile(profile: CachedSupabaseProfile | null) {
-  try {
-    if (typeof window === 'undefined') return;
-    if (!profile) {
-      localStorage.removeItem(LOCAL_SUPABASE_PROFILE_KEY);
-    } else {
-      localStorage.setItem(LOCAL_SUPABASE_PROFILE_KEY, JSON.stringify(profile));
-    }
-  } catch {
-    // Ignore sandboxed storage restriction
-  }
-}
+const DEFAULT_CLERK_PUBLISHABLE_KEY =
+  'pk_test_dGFsZW50ZWQtcGhvZW5peC03NTU5LmNsZXJrLmFjY291bnRzLmRldiQ';
 
 interface AppContextValue {
   language: Language;
@@ -69,7 +32,8 @@ interface AppContextValue {
   readiness: ServiceReadiness | null;
   announcement: string;
   refreshSession: () => Promise<void>;
-  completeSupabaseLogin: (sbUser: { id: string; email?: string | null }, fullName: string) => void;
+  openClerkSignIn: () => void;
+  openClerkSignUp: () => void;
   logout: () => Promise<void>;
   tickers: MarketTicker[];
   tickerMap: Map<string, MarketTicker>;
@@ -97,6 +61,8 @@ interface ClerkBridgeProps {
   clerkAdmin: boolean;
   clerkError: string | null;
   clerkSignOut: (() => Promise<void>) | null;
+  clerkOpenSignIn: (() => void) | null;
+  clerkOpenSignUp: (() => void) | null;
   onClerkPublishableKey: (key: string) => void;
   children: React.ReactNode;
 }
@@ -115,6 +81,8 @@ function AppStateCore({
   clerkAdmin,
   clerkError,
   clerkSignOut,
+  clerkOpenSignIn,
+  clerkOpenSignUp,
   onClerkPublishableKey,
   children,
 }: ClerkBridgeProps) {
@@ -218,7 +186,6 @@ function AppStateCore({
       const healthRes = await apiFetch<{
         readiness: ServiceReadiness;
         clerkConfig: { publishableKey: string } | null;
-        supabaseConfig?: { url: string; publishableKey: string } | null;
       }>('/api/health').catch(() => null);
 
       if (healthRes) {
@@ -226,36 +193,39 @@ function AppStateCore({
         if (healthRes.clerkConfig?.publishableKey) {
           onClerkPublishableKey(healthRes.clerkConfig.publishableKey);
         }
-        if (healthRes.supabaseConfig) {
-          configurePublicSupabaseClient(healthRes.supabaseConfig);
-        }
       }
 
-      const [meRes, plansRes, sbSessionRes] = await Promise.all([
-        apiFetch<{ authenticated: boolean; user: UserProfile | null; preferences?: { language?: Language } }>('/api/auth/me').catch(() => null),
+      const [meRes, plansRes] = await Promise.all([
+        clerkSignedIn
+          ? apiFetch<{ authenticated: boolean; user: UserProfile | null; preferences?: { language?: Language } }>('/api/auth/me').catch(() => null)
+          : Promise.resolve(null),
         apiFetch<{ config: { announcement?: string } }>('/api/user/plans').catch(() => ({ config: { announcement: '' } })),
-        supabase.auth.getSession().catch(() => ({ data: { session: null } })),
       ]);
 
       setAnnouncement(plansRes.config?.announcement || '');
 
-      const sbSession = sbSessionRes.data?.session || null;
-      const cachedProfile = readCachedSupabaseProfile();
-
-      if (meRes?.authenticated && meRes.user) {
+      if (clerkSignedIn && clerkUserId) {
+        const now = new Date().toISOString();
+        const fallbackEmail = (clerkEmail || meRes?.user?.email || '').trim().toLowerCase();
         const resolvedName =
-          meRes.user.displayName ||
-          (cachedProfile && (cachedProfile.uid === meRes.user.uid || cachedProfile.email === meRes.user.email)
-            ? cachedProfile.displayName
-            : '');
-        const resolvedUser: UserProfile = {
-          ...meRes.user,
-          ...(resolvedName ? { displayName: resolvedName } : {}),
-          role: clerkAdmin ? 'admin' : 'user',
-        };
-        setUser(resolvedUser);
+          clerkDisplayName ||
+          meRes?.user?.displayName ||
+          (fallbackEmail ? fallbackEmail.split('@')[0] : 'Trader');
 
-        if (meRes.preferences?.language === 'en' || meRes.preferences?.language === 'ar') {
+        setUser({
+          uid: meRes?.user?.uid || clerkUserId,
+          clerkUserId,
+          email: fallbackEmail,
+          displayName: resolvedName,
+          role: clerkAdmin ? 'admin' : 'user',
+          plan: meRes?.user?.plan || 'free',
+          status: meRes?.user?.status || 'active',
+          createdAt: meRes?.user?.createdAt || now,
+          updatedAt: now,
+          lastLoginAt: meRes?.user?.lastLoginAt || now,
+        });
+
+        if (meRes?.preferences?.language === 'en' || meRes?.preferences?.language === 'ar') {
           setLanguageState(meRes.preferences.language);
         }
 
@@ -268,134 +238,24 @@ function AppStateCore({
           const wl = await apiFetch<{ symbols: string[] }>('/api/user/watchlist');
           if (Array.isArray(wl.symbols) && wl.symbols.length > 0) setWatchlist(wl.symbols);
         } catch {
-          // ignore
-        }
-      } else if (clerkSignedIn && clerkUserId) {
-        const now = new Date().toISOString();
-        const fallbackEmail = (clerkEmail || '').trim().toLowerCase();
-        setUser({
-          uid: clerkUserId,
-          clerkUserId,
-          email: fallbackEmail,
-          displayName: clerkDisplayName || (fallbackEmail ? fallbackEmail.split('@')[0] : 'Trader'),
-          role: clerkAdmin ? 'admin' : 'user',
-          plan: 'free',
-          status: 'active',
-          createdAt: now,
-          updatedAt: now,
-          lastLoginAt: now,
-        });
-        const currentPath = routeRef.current.split('?')[0];
-        if (currentPath === '/login' || currentPath === '/register' || currentPath === '/verify-otp') {
-          navigate('/dashboard');
-        }
-      } else if (sbSession?.user) {
-        let profileName =
-          (typeof sbSession.user.user_metadata?.full_name === 'string' && sbSession.user.user_metadata.full_name) ||
-          (cachedProfile && cachedProfile.uid === sbSession.user.id ? cachedProfile.displayName : '') ||
-          '';
-
-        try {
-          const { data: profileRow } = await supabase
-            .from('profiles')
-            .select('full_name, email')
-            .eq('id', sbSession.user.id)
-            .maybeSingle();
-          if (profileRow && typeof profileRow.full_name === 'string' && profileRow.full_name.trim()) {
-            profileName = profileRow.full_name.trim();
-          }
-        } catch {
-          // Table/RLS might not be provisioned yet; local profile fallback remains intact
-        }
-
-        const sbEmail = (sbSession.user.email || cachedProfile?.email || '').trim().toLowerCase();
-        if (sbEmail) {
-          writeCachedSupabaseProfile({
-            uid: sbSession.user.id,
-            email: sbEmail,
-            displayName: profileName,
-          });
-        }
-
-        const now = new Date().toISOString();
-        setUser({
-          uid: sbSession.user.id,
-          clerkUserId: `sb:${sbSession.user.id}`,
-          email: sbEmail,
-          displayName: profileName || sbEmail.split('@')[0],
-          role: clerkAdmin ? 'admin' : 'user',
-          plan: 'free',
-          status: 'active',
-          createdAt: sbSession.user.created_at || now,
-          updatedAt: now,
-          lastLoginAt: now,
-        });
-
-        const currentPath = routeRef.current.split('?')[0];
-        if (currentPath === '/login' || currentPath === '/register' || currentPath === '/verify-otp') {
-          navigate('/dashboard');
+          // ignore if backend unavailable
         }
       } else {
         setUser(null);
       }
     } catch {
-      setUser(null);
+      if (!clerkSignedIn) {
+        setUser(null);
+      }
     } finally {
       setAuthLoading(false);
     }
   }, [clerkAdmin, clerkDisplayName, clerkEmail, clerkSignedIn, clerkUserId, navigate, onClerkPublishableKey]);
 
-  const completeSupabaseLogin = useCallback(
-    (sbUser: { id: string; email?: string | null }, fullName: string) => {
-      const cleanEmail = (sbUser.email || '').trim().toLowerCase();
-      const cleanName = fullName.trim() || cleanEmail.split('@')[0];
-      writeCachedSupabaseProfile({
-        uid: sbUser.id,
-        email: cleanEmail,
-        displayName: cleanName,
-      });
-
-      const now = new Date().toISOString();
-      setUser({
-        uid: sbUser.id,
-        clerkUserId: `sb:${sbUser.id}`,
-        email: cleanEmail,
-        displayName: cleanName,
-        role: clerkAdmin ? 'admin' : 'user',
-        plan: 'free',
-        status: 'active',
-        createdAt: now,
-        updatedAt: now,
-        lastLoginAt: now,
-      });
-
-      void refreshSession();
-    },
-    [clerkAdmin, refreshSession],
-  );
-
-  // Initial health & session fetch runs immediately without waiting on Clerk JS download (never blocks rendering)
+  // Initial health & Clerk session hydration
   useEffect(() => {
     refreshSession();
-  }, [clerkLoaded, clerkSignedIn, clerkUserId, clerkAdmin, refreshSession]);
-
-  // Keep Supabase Auth session synced across tabs, token refreshes, and reloads
-  useEffect(() => {
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-        void refreshSession();
-      } else if (event === 'SIGNED_OUT') {
-        writeCachedSupabaseProfile(null);
-        if (!clerkSignedIn) {
-          setUser(null);
-          setNotifications([]);
-        }
-      }
-    });
-    return () => subscription.unsubscribe();
-  }, [clerkSignedIn, refreshSession]);
+  }, [clerkLoaded, clerkSignedIn, clerkUserId, clerkDisplayName, clerkAdmin, refreshSession]);
 
   useEffect(() => {
     if (user) {
@@ -405,12 +265,26 @@ function AppStateCore({
     }
   }, [user, refreshNotifications]);
 
+  const openClerkSignIn = useCallback(() => {
+    if (clerkOpenSignIn) {
+      clerkOpenSignIn();
+    } else {
+      navigate('/login');
+    }
+  }, [clerkOpenSignIn, navigate]);
+
+  const openClerkSignUp = useCallback(() => {
+    if (clerkOpenSignUp) {
+      clerkOpenSignUp();
+    } else {
+      navigate('/register');
+    }
+  }, [clerkOpenSignUp, navigate]);
+
   const logout = useCallback(async () => {
     if (clerkSignOut) {
       await clerkSignOut().catch(() => {});
     }
-    await supabase.auth.signOut().catch(() => {});
-    writeCachedSupabaseProfile(null);
     setUser(null);
     setNotifications([]);
     navigate('/');
@@ -608,7 +482,8 @@ function AppStateCore({
         readiness,
         announcement,
         refreshSession,
-        completeSupabaseLogin,
+        openClerkSignIn,
+        openClerkSignUp,
         logout,
         tickers,
         tickerMap,
@@ -640,6 +515,7 @@ function ClerkRuntimeBridge({
 }) {
   const { isLoaded, isSignedIn, userId, getToken, signOut } = useAuth();
   const { isLoaded: clerkUserLoaded, user: clerkUser } = useUser();
+  const clerk = useClerk();
   const isClerkAdmin = Boolean(clerkUser?.publicMetadata?.role === 'admin');
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
@@ -647,13 +523,7 @@ function ClerkRuntimeBridge({
   registerIdTokenGetter(async () => {
     try {
       const clerkToken = await getTokenRef.current();
-      if (clerkToken) return clerkToken;
-    } catch {
-      // Fallback to Supabase Auth session token
-    }
-    try {
-      const { data } = await supabase.auth.getSession();
-      return data.session?.access_token || null;
+      return clerkToken || null;
     } catch {
       return null;
     }
@@ -663,6 +533,22 @@ function ClerkRuntimeBridge({
     await signOut();
   }, [signOut]);
 
+  const handleOpenSignIn = useCallback(() => {
+    clerk.openSignIn({ fallbackRedirectUrl: '/dashboard' });
+  }, [clerk]);
+
+  const handleOpenSignUp = useCallback(() => {
+    clerk.openSignUp({ fallbackRedirectUrl: '/dashboard' });
+  }, [clerk]);
+
+  const unsafeMeta = (clerkUser?.unsafeMetadata || {}) as Record<string, unknown>;
+  const resolvedDisplayName =
+    (typeof unsafeMeta.displayName === 'string' && unsafeMeta.displayName.trim()) ||
+    clerkUser?.fullName ||
+    clerkUser?.firstName ||
+    clerkUser?.username ||
+    null;
+
   return (
     <AppStateCore
       clerkActive={!clerkError}
@@ -670,10 +556,12 @@ function ClerkRuntimeBridge({
       clerkSignedIn={Boolean(isSignedIn)}
       clerkUserId={userId || null}
       clerkEmail={clerkUser?.primaryEmailAddress?.emailAddress || null}
-      clerkDisplayName={clerkUser?.fullName || clerkUser?.username || null}
+      clerkDisplayName={resolvedDisplayName}
       clerkAdmin={isClerkAdmin}
       clerkError={clerkError}
       clerkSignOut={handleSignOut}
+      clerkOpenSignIn={handleOpenSignIn}
+      clerkOpenSignUp={handleOpenSignUp}
       onClerkPublishableKey={onClerkPublishableKey}
     >
       {children}
@@ -712,7 +600,7 @@ class ClerkSafeBoundary extends React.Component<
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [clerkPublishableKey, setClerkPublishableKey] = useState<string>(() => {
     const envKey = (import.meta.env?.VITE_CLERK_PUBLISHABLE_KEY || '').trim();
-    return envKey;
+    return envKey || DEFAULT_CLERK_PUBLISHABLE_KEY;
   });
   const [clerkLoadError, setClerkLoadError] = useState<string | null>(null);
 
@@ -729,7 +617,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const validKey = clerkPublishableKey && isValidClerkPublishableKey(clerkPublishableKey);
   const keyFormatError =
     clerkPublishableKey && !validKey
-      ? 'Invalid VITE_CLERK_PUBLISHABLE_KEY format (expected pk_test_... or pk_live_...).'
+      ? 'Invalid Clerk Publishable Key format (expected pk_test_... or pk_live_...).'
       : null;
 
   if (validKey) {
@@ -746,6 +634,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             clerkAdmin={false}
             clerkError={errMsg}
             clerkSignOut={null}
+            clerkOpenSignIn={null}
+            clerkOpenSignUp={null}
             onClerkPublishableKey={handleClerkKey}
           >
             {children}
@@ -774,14 +664,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
   }
 
-  registerIdTokenGetter(async () => {
-    try {
-      const { data } = await supabase.auth.getSession();
-      return data.session?.access_token || null;
-    } catch {
-      return null;
-    }
-  });
+  registerIdTokenGetter(async () => null);
 
   return (
     <AppStateCore
@@ -794,6 +677,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       clerkAdmin={false}
       clerkError={keyFormatError}
       clerkSignOut={null}
+      clerkOpenSignIn={null}
+      clerkOpenSignUp={null}
       onClerkPublishableKey={handleClerkKey}
     >
       {children}
