@@ -283,7 +283,9 @@ function AppStateCore({
 
   const logout = useCallback(async () => {
     if (clerkSignOut) {
-      await clerkSignOut().catch(() => {});
+      await clerkSignOut().catch((err) => {
+        console.error('[Clerk signOut error]', err);
+      });
     }
     setUser(null);
     setNotifications([]);
@@ -524,7 +526,8 @@ function ClerkRuntimeBridge({
     try {
       const clerkToken = await getTokenRef.current();
       return clerkToken || null;
-    } catch {
+    } catch (err) {
+      console.error('[Clerk getToken error]', err);
       return null;
     }
   });
@@ -534,11 +537,19 @@ function ClerkRuntimeBridge({
   }, [signOut]);
 
   const handleOpenSignIn = useCallback(() => {
-    clerk.openSignIn({ fallbackRedirectUrl: '/dashboard' });
+    try {
+      clerk.openSignIn({ fallbackRedirectUrl: '/dashboard' });
+    } catch (err) {
+      console.error('[Clerk openSignIn error]', err);
+    }
   }, [clerk]);
 
   const handleOpenSignUp = useCallback(() => {
-    clerk.openSignUp({ fallbackRedirectUrl: '/dashboard' });
+    try {
+      clerk.openSignUp({ fallbackRedirectUrl: '/dashboard' });
+    } catch (err) {
+      console.error('[Clerk openSignUp error]', err);
+    }
   }, [clerk]);
 
   const unsafeMeta = (clerkUser?.unsafeMetadata || {}) as Record<string, unknown>;
@@ -688,7 +699,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
 function ClerkFailureNotifier({ onFail }: { onFail: (msg: string) => void }) {
   useEffect(() => {
-    onFail('Clerk JS could not load in this browser context. Check domain settings or network access.');
+    const msg = 'Clerk JS could not load in this browser context. Check domain settings or network access.';
+    console.error('[ClerkFailed]', msg);
+    onFail(msg);
   }, [onFail]);
   return null;
 }
