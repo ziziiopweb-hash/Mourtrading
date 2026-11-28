@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../contexts/AppContext.tsx';
-import { apiFetch } from '../lib/api.ts';
+import { fetchDirectBinanceIndicators } from '../lib/binancePublic.ts';
 import { formatPercent, formatPrice } from '../lib/formatters.ts';
 import { TradingChart } from '../components/TradingChart.tsx';
 import type { OhlcvCandle, TechnicalIndicatorsSummary, Timeframe } from '../types/trading.ts';
@@ -19,9 +19,7 @@ export function AdvancedChartsPage() {
 
   useEffect(() => {
     let active = true;
-    apiFetch<{ candles: OhlcvCandle[]; summary: TechnicalIndicatorsSummary }>(
-      `/api/market/indicators?symbol=${encodeURIComponent(symbol)}&interval=${timeframe}`,
-    )
+    fetchDirectBinanceIndicators(symbol, timeframe, 350)
       .then((res) => {
         if (!active) return;
         setCandles(res.candles);

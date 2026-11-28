@@ -16,18 +16,18 @@ export function PrivacyPolicyPage() {
       <div className="bg-[#0D131F] border border-white/10 rounded-xl p-6 space-y-4 text-sm text-slate-300 leading-relaxed">
         <p>
           {isAr
-            ? 'تحترم منصة MourTrading خصوصية بياناتك. نقوم بجمع البريد الإلكتروني فقط لغرض المصادقة الآمنة عبر رمز التحقق لمرة واحدة (OTP) وإرسال التنبيهات التي تفعلها باختيارك.'
-            : 'MourTrading respects your data privacy. We collect your email address solely for passwordless OTP authentication and user-opted price alert notifications.'}
+            ? 'تحترم منصة MourTrading خصوصية بياناتك. نستخدم Clerk لإدارة المصادقة الآمنة والتحقق من البريد الإلكتروني وإدارة الجلسات، ونجمع بريدك الإلكتروني فقط للتحقق من الهوية وإرسال التنبيهات التي تفعلها باختيارك.'
+            : 'MourTrading respects your data privacy. We use Clerk for secure email authentication, verification, and session management, collecting your email solely for account identity and user-opted alert notifications.'}
         </p>
         <p>
           {isAr
-            ? 'يتم تخزين رموز التحقق بشكل مشفر (Hash) وتنتهي صلاحيتها خلال 5 دقائق. لا نصل أبداً إلى حسابك الشخصي على Binance ولا نطلب مفاتيح التداول الخاصة بك.'
-            : 'OTP codes are stored exclusively as cryptographic hashes with a 5-minute TTL. MourTrading never connects to your personal Binance exchange account or requests trading API keys.'}
+            ? 'لا نصل أبداً إلى حسابك الشخصي على Binance ولا نطلب مفاتيح التداول الخاصة بك أو أذونات السحب.'
+            : 'MourTrading never connects to your personal Binance exchange account or requests trading or withdrawal API keys.'}
         </p>
         <p>
           {isAr
-            ? 'تُحفظ بيانات المحفظة اليدوية وقوائم المفضلة والتنبيهات في قاعدة بيانات Supabase PostgreSQL مع عزل صارم لكل مستخدم عبر سياسات أمان الصفوف (RLS).'
-            : 'Manual portfolio holdings, watchlists, and price alerts are isolated per user in Supabase PostgreSQL under strict Row Level Security (RLS) policies.'}
+            ? 'تُحفظ بيانات المحفظة اليدوية وقوائم المفضلة والتنبيهات وسجل تحليلات الذكاء الاصطناعي في قاعدة بيانات Supabase PostgreSQL عبر وصول خادمي آمن ومعزول لكل مستخدم موثق.'
+            : 'Manual portfolio holdings, watchlists, price alerts, and AI analysis history are stored in Supabase PostgreSQL via authenticated server-side access isolated per verified user ID.'}
         </p>
       </div>
     </div>

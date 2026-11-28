@@ -1,57 +1,66 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-export interface SupabasePublicConfig {
-  url: string;
-  publishableKey: string;
+const DEFAULT_SUPABASE_URL = 'https://szmpxygiitcxuhgmjtiv.supabase.co';
+const DEFAULT_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_b_N6aO6knHXvTmvO41otLA_jyLwY1F_';
+
+function isUsableUrl(url: string | undefined): url is string {
+  if (!url) return false;
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.includes('YOUR-PROJECT-REF')) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
 }
 
-let supabaseInstance: SupabaseClient | null = null;
-let initializedKeySignature = '';
-
-function getBuildTimeConfig(): SupabasePublicConfig | null {
-  const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim();
-  const publishableKey = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined)?.trim();
-  if (url && publishableKey) {
-    return { url, publishableKey };
-  }
-  return null;
+function getInitialSupabaseUrl(): string {
+  const envUrl = import.meta.env?.VITE_SUPABASE_URL;
+  return isUsableUrl(envUrl) ? envUrl.trim() : DEFAULT_SUPABASE_URL;
 }
 
-export function initSupabaseClient(runtimeConfig?: SupabasePublicConfig | null): SupabaseClient | null {
-  const cfg = runtimeConfig?.url && runtimeConfig?.publishableKey
-    ? runtimeConfig
-    : getBuildTimeConfig();
+function getInitialSupabaseKey(): string {
+  const envKey = (import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY || '').trim();
+  return envKey || DEFAULT_SUPABASE_PUBLISHABLE_KEY;
+}
 
-  if (!cfg) {
-    return supabaseInstance;
-  }
+let currentUrl = getInitialSupabaseUrl();
+let currentKey = getInitialSupabaseKey();
 
-  const sig = `${cfg.url}::${cfg.publishableKey}`;
-  if (supabaseInstance && initializedKeySignature === sig) {
-    return supabaseInstance;
-  }
-
-  supabaseInstance = createClient(cfg.url, cfg.publishableKey, {
+function buildClient(url: string, key: string): SupabaseClient {
+  return createClient(url, key, {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      storageKey: 'mourtrading_supabase_auth',
     },
   });
-  initializedKeySignature = sig;
-  return supabaseInstance;
 }
 
-export function getSupabaseClient(): SupabaseClient | null {
-  if (!supabaseInstance) {
-    initSupabaseClient();
+export let supabase: SupabaseClient = buildClient(currentUrl, currentKey);
+
+/**
+ * Allows runtime public Supabase config loaded from /api/health to configure the browser client
+ * when Vite build-time env vars aren't injected directly. Never accepts private service_role keys.
+ */
+export function configurePublicSupabaseClient(config?: { url?: string; publishableKey?: string } | null): SupabaseClient {
+  if (!config) return supabase;
+  const nextUrl = isUsableUrl(config.url) ? config.url.trim() : currentUrl;
+  const nextKey = (config.publishableKey || '').trim() || currentKey;
+
+  if (nextUrl !== currentUrl || nextKey !== currentKey) {
+    currentUrl = nextUrl;
+    currentKey = nextKey;
+    supabase = buildClient(currentUrl, currentKey);
   }
-  return supabaseInstance;
+  return supabase;
 }
 
-export async function getSupabaseAccessToken(): Promise<string | null> {
-  const client = getSupabaseClient();
-  if (!client) return null;
-  const { data } = await client.auth.getSession();
-  return data.session?.access_token ?? null;
+export function getPublicSupabaseConfigState() {
+  return {
+    url: currentUrl,
+    hasPublishableKey: Boolean(currentKey),
+  };
 }

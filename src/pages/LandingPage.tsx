@@ -1,25 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, ArrowRight, Bot, CandlestickChart, Globe2, ShieldCheck, Signal, TrendingDown, TrendingUp } from 'lucide-react';
 import { useApp } from '../contexts/AppContext.tsx';
-import { apiFetch } from '../lib/api.ts';
+import { fetchDirectGlobalStats, type GlobalMarketStats } from '../lib/binancePublic.ts';
 import { formatCompactVolume, formatPercent, formatPrice, formatTimestamp } from '../lib/formatters.ts';
-
-interface GlobalStats {
-  total_market_cap?: { usd?: number };
-  total_volume?: { usd?: number };
-  market_cap_percentage?: { btc?: number; eth?: number };
-  market_cap_change_percentage_24h_usd?: number;
-}
 
 export function LandingPage() {
   const { language, t, navigate, tickers, wsConnected, lastTickAt, user } = useApp();
   const isAr = language === 'ar';
-  const [globalStats, setGlobalStats] = useState<GlobalStats | null>(null);
+  const [globalStats, setGlobalStats] = useState<GlobalMarketStats | null>(null);
 
   useEffect(() => {
-    apiFetch<{ available: boolean; data: GlobalStats | null }>('/api/market/global')
-      .then((res) => {
-        if (res.available && res.data) setGlobalStats(res.data);
+    fetchDirectGlobalStats()
+      .then((stats) => {
+        if (stats) setGlobalStats(stats);
       })
       .catch(() => {});
   }, []);

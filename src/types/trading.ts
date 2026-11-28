@@ -244,6 +244,7 @@ export interface AppNotification {
 
 export interface UserProfile {
   uid: string;
+  clerkUserId?: string;
   email: string;
   displayName?: string;
   role: 'user' | 'admin';
@@ -280,14 +281,21 @@ export interface AppConfig {
 export interface ServiceReadiness {
   binanceMarket: { ok: boolean; wsConnected: boolean; lastTickAt: number | null; pairCount: number };
   geminiAi: { configured: boolean; missingVars: string[] };
-  resendEmail: { configured: boolean; missingVars: string[] };
+  clerk: {
+    configured: boolean;
+    publishableKeyPresent: boolean;
+    secretKeyPresent: boolean;
+    missingVars: string[];
+  };
   supabase: {
     configured: boolean;
+    serviceRoleConfigured: boolean;
     connected: boolean;
     schemaReady: boolean;
+    mode: 'supabase' | 'local';
+    optional: boolean;
     url: string;
     missingVars: string[];
     error?: string;
   };
-  paymentGateway: { configured: boolean; status: 'pending_configuration' | 'active' };
 }

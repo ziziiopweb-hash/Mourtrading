@@ -1,37 +1,56 @@
-# MourTrading — Production Setup & Deployment Guide (Supabase + Gemini)
+# MourTrading — Production Setup & Deployment Guide (Clerk + Supabase PostgreSQL)
 
-## 1. Required Environment Variables
+## 1. Environment Variables
 
-Configure these secrets in your hosting environment (AI Studio **Settings > Secrets**, `.env` locally, or Cloud Run Secret Manager). Never commit real secrets to GitHub.
+Configure secrets in your hosting environment (AI Studio **Settings > Secrets**, `.env` locally, or Cloud Run Secret Manager). Never expose server secrets in frontend `VITE_*` variables or commit `.env` to GitHub.
 
-| Variable | Purpose | Required |
-| :--- | :--- | :--- |
-| `VITE_SUPABASE_URL` | Supabase project URL (`https://szmpxygiitcxuhgmjtiv.supabase.co`) | Yes |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase project publishable (`anon`) key | Yes |
-| `GEMINI_API_KEY` | Server-side Mour AI market & chart vision analysis (`@google/genai`) | Yes |
-| `ADMIN_EMAIL` | Reserved administrator account (`jackwilliam2026a@gmail.com`) | Yes |
-| `SUPABASE_SERVICE_ROLE_KEY` | Enables background 12s signal TP/SL & price alert evaluator (server-only) | Optional |
-| `RESEND_API_KEY` | Price alert notification emails (and custom SMTP in Supabase Auth) | Optional |
-| `RESEND_FROM_EMAIL` | Verified sender address in Resend (e.g. `MourTrading <noreply@yourdomain.com>`) | Optional |
-| `STRIPE_SECRET_KEY` | External payment gateway key (leave blank until activating Pro checkout) | Optional |
+| Variable | Purpose | Scope | Required |
+| :--- | :--- | :--- | :--- |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Clerk Publishable Key (`pk_test_...` / `pk_live_...`) for `<SignIn />`, `<SignUp />`, `<UserProfile />` | Client + Server | **Yes** |
+| `CLERK_SECRET_KEY` | Clerk Secret Key (`sk_test_...` / `sk_live_...`) for server JWT verification & admin role sync | **Server-only** | **Yes** |
+| `VITE_SUPABASE_URL` | Supabase PostgreSQL project URL (`https://szmpxygiitcxuhgmjtiv.supabase.co`) | Server | Optional (local fallback built-in) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Service Role Key used **strictly on Express server** for cloud persistence & 12s monitors | **Server-only (NEVER expose in frontend)** | Optional (falls back to `.mourtrading-data/store.json` if omitted) |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase project publishable key (read-only fallback for public market signals/plans) | Server | Optional |
+| `GEMINI_API_KEY` | Server-side Mour AI market & chart vision analysis (`@google/genai`) | **Server-only** | Yes (for AI reports) |
+| `ADMIN_EMAIL` | Reserved administrator account (`jackwilliam2026a@gmail.com`) | Server | Yes |
+
+> **Security Note:** Stripe and Resend are completely removed. `SUPABASE_SERVICE_ROLE_KEY` and `CLERK_SECRET_KEY` never leave the Express backend. Every database mutation verifies Clerk JWT signatures + verified email claims first and scopes rows explicitly by the mapped `user_id`.
 
 ---
 
-## 2. Supabase PostgreSQL Schema, Triggers & RLS Setup
+## 2. Clerk Authentication Setup Steps
 
+1. Create or open your application in the [Clerk Dashboard](https://dashboard.clerk.com/).
+2. Navigate to **User & Authentication > Email, Phone, Username**:
+   - Enable **Email address**.
+   - Enable **Verify at sign-up** using **Email verification code** (required by MourTrading before session access).
+   - Enable **Email verification code** (passwordless email login) and/or **Password** depending on your preference.
+3. Navigate to **API Keys**, copy your **Publishable key** (`VITE_CLERK_PUBLISHABLE_KEY`) and **Secret key** (`CLERK_SECRET_KEY`), and add them to your environment secrets.
+4. Admin Roles:
+   - Signing in with verified primary email `jackwilliam2026a@gmail.com` automatically assigns `role = 'admin'` in Supabase `user_profiles` and Clerk `publicMetadata.role`.
+   - From `/admin/users`, admins can promote or demote other verified users (`Make Admin` / `Revoke Admin`), updating both Supabase PostgreSQL and Clerk `publicMetadata.role`.
+
+---
+
+## 3. Supabase PostgreSQL Database Setup (Non-Destructive)
+
+### Option A: Existing Supabase Database (Preserves All Existing Tables & Data)
 1. Open your Supabase project dashboard (`https://szmpxygiitcxuhgmjtiv.supabase.co`) -> **SQL Editor**.
-2. Paste and execute the entire contents of `supabase/schema.sql`.
-   This creates:
-   - All 14 PostgreSQL tables (`user_profiles`, `user_preferences`, `favorites`, `analyses`, `signals`, `signal_events`, `portfolios`, `portfolio_transactions`, `price_alerts`, `notifications`, `subscriptions`, `app_config`, `admin_audit_logs`, `auth_failure_logs`).
-   - `handle_new_user()` trigger on `auth.users` that auto-provisions profile, default favorites, preferences, portfolio, subscription, and grants `role = 'admin'` strictly to `jackwilliam2026a@gmail.com`.
-   - `protect_profile_privileged_columns()` trigger preventing role/plan/status self-escalation.
-   - `get_my_ai_quota()` & `save_verified_ai_analysis(...)` `SECURITY DEFINER` RPCs for atomic rolling 24h AI quota enforcement.
-   - Strict Row Level Security (`ENABLE ROW LEVEL SECURITY`) policies on every table.
-3. In **Authentication > Providers > Email**, ensure **Email** is enabled and customize the **Magic Link / Email OTP** template to display `{{ .Token }}` so users receive a 6-digit OTP code.
+2. Execute `supabase/clerk_migration.sql`.
+   - Safely adds `clerk_user_id text UNIQUE` to `public.user_profiles` without dropping tables or deleting existing data.
+   - Drops legacy `auth.users` foreign-key constraints so Clerk users link cleanly alongside existing Supabase profiles (matched automatically by `clerk_user_id` or verified primary `email`).
+   - Adds `get_user_ai_quota(p_user_id uuid)` and `save_verified_user_ai_analysis(...)` RPCs for rolling 24h AI quota enforcement.
+
+### Option B: Fresh Supabase Database
+1. Open **SQL Editor** in Supabase.
+2. Execute `supabase/schema.sql`.
+   - Creates all 14 tables (`user_profiles`, `user_preferences`, `favorites`, `analyses`, `signals`, `signal_events`, `portfolios`, `portfolio_transactions`, `price_alerts`, `notifications`, `subscriptions`, `app_config`, `admin_audit_logs`, `auth_failure_logs`), indexes, RLS policies, and Clerk-compatible RPCs.
+
+3. Add `SUPABASE_SERVICE_ROLE_KEY` from **Supabase > Project Settings > API** to your server secrets.
 
 ---
 
-## 3. Google Cloud Run Deployment
+## 4. Google Cloud Run Deployment
 
 ```bash
 gcloud run deploy mourtrading \
@@ -41,4 +60,4 @@ gcloud run deploy mourtrading \
   --allow-unauthenticated \
   --set-env-vars "VITE_SUPABASE_URL=https://szmpxygiitcxuhgmjtiv.supabase.co,ADMIN_EMAIL=jackwilliam2026a@gmail.com,NODE_ENV=production"
 ```
-Attach `VITE_SUPABASE_PUBLISHABLE_KEY`, `GEMINI_API_KEY`, and optionally `SUPABASE_SERVICE_ROLE_KEY` and `RESEND_API_KEY` via Cloud Run Secret Manager.
+Attach `VITE_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and `GEMINI_API_KEY` via Cloud Run Secret Manager.

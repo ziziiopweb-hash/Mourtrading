@@ -43,15 +43,27 @@ export async function apiFetch<T>(url: string, init: RequestInit = {}): Promise<
 
   const text = await res.text();
   let json: Record<string, unknown> = {};
+  let parsedAsJson = false;
   try {
     json = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    parsedAsJson = true;
   } catch {
-    json = { error: text || `HTTP ${res.status}` };
+    const looksLikeHtmlOrNotFound =
+      res.status === 404 ||
+      text.includes('NOT_FOUND') ||
+      text.includes('The page could not be found') ||
+      text.trim().startsWith('<');
+    json = {
+      error: looksLikeHtmlOrNotFound
+        ? `Service endpoint unavailable (${res.status})`
+        : text.slice(0, 180) || `HTTP ${res.status}`,
+    };
   }
 
   if (!res.ok) {
+    const rawMsg = parsedAsJson ? String(json.error || `Request failed (${res.status})`) : String(json.error);
     throw new ApiError(
-      String(json.error || `Request failed (${res.status})`),
+      rawMsg,
       res.status,
       typeof json.code === 'string' ? json.code : undefined,
       Array.isArray(json.missingVars) ? json.missingVars.map(String) : undefined,

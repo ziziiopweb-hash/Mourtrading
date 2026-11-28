@@ -189,15 +189,14 @@ export function PortfolioPage() {
         )}
       </div>
 
-      {readiness && (!readiness.supabase.configured || !readiness.supabase.schemaReady) && (
+      {readiness && !readiness.clerk.configured && (
         <ConfigNotice
           message={
-            readiness.supabase.error ||
-            (isAr
-              ? 'حفظ المحفظة وسجل المعاملات في Supabase PostgreSQL يتطلب إعداد متغيرات Supabase.'
-              : 'Persisting manual holdings and transactions in Supabase PostgreSQL requires Supabase configuration.')
+            isAr
+              ? 'حفظ المحفظة وسجل المعاملات يتطلب تهيئة مصادقة Clerk.'
+              : 'Persisting manual holdings and transactions requires Clerk authentication configuration.'
           }
-          missingVars={readiness.supabase.missingVars}
+          missingVars={readiness.clerk.missingVars}
         />
       )}
 

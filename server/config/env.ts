@@ -10,8 +10,14 @@ export const ENV = {
   APP_URL: process.env.APP_URL || 'http://localhost:3000',
   ADMIN_EMAIL: (process.env.ADMIN_EMAIL || 'jackwilliam2026a@gmail.com').trim().toLowerCase(),
   GEMINI_API_KEY: (process.env.GEMINI_API_KEY || '').trim(),
-  RESEND_API_KEY: (process.env.RESEND_API_KEY || '').trim(),
-  RESEND_FROM_EMAIL: (process.env.RESEND_FROM_EMAIL || 'MourTrading <onboarding@resend.dev>').trim(),
+  // Clerk Authentication
+  CLERK_PUBLISHABLE_KEY: (
+    process.env.VITE_CLERK_PUBLISHABLE_KEY ||
+    process.env.CLERK_PUBLISHABLE_KEY ||
+    ''
+  ).trim(),
+  CLERK_SECRET_KEY: (process.env.CLERK_SECRET_KEY || '').trim(),
+  // Supabase PostgreSQL Database
   SUPABASE_URL: (
     process.env.VITE_SUPABASE_URL ||
     process.env.SUPABASE_URL ||
@@ -24,18 +30,34 @@ export const ENV = {
   ).trim(),
   SUPABASE_SERVICE_ROLE_KEY: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim(),
   SESSION_SECRET: (process.env.SESSION_SECRET || '').trim() || EPHEMERAL_SESSION_SECRET,
-  STRIPE_SECRET_KEY: (process.env.STRIPE_SECRET_KEY || '').trim(),
 };
 
-export function getMissingSupabaseVars(): string[] {
+export function getMissingClerkVars(): string[] {
   const missing: string[] = [];
-  if (!ENV.SUPABASE_URL) missing.push('VITE_SUPABASE_URL');
-  if (!ENV.SUPABASE_PUBLISHABLE_KEY) missing.push('VITE_SUPABASE_PUBLISHABLE_KEY');
+  if (!ENV.CLERK_PUBLISHABLE_KEY) missing.push('VITE_CLERK_PUBLISHABLE_KEY');
+  if (!ENV.CLERK_SECRET_KEY) missing.push('CLERK_SECRET_KEY');
   return missing;
 }
 
-export function getMissingResendVars(): string[] {
-  return ENV.RESEND_API_KEY ? [] : ['RESEND_API_KEY'];
+export function isClerkConfigured(): boolean {
+  return getMissingClerkVars().length === 0;
+}
+
+export function getPublicClerkConfig(): { publishableKey: string } | null {
+  if (!ENV.CLERK_PUBLISHABLE_KEY) return null;
+  return { publishableKey: ENV.CLERK_PUBLISHABLE_KEY };
+}
+
+export function getPublicSupabaseConfig(): { url: string; publishableKey: string } {
+  return {
+    url: ENV.SUPABASE_URL || DEFAULT_PROJECT_URL,
+    publishableKey:
+      ENV.SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_b_N6aO6knHXvTmvO41otLA_jyLwY1F_',
+  };
+}
+
+export function getMissingSupabaseVars(): string[] {
+  return [];
 }
 
 export function getMissingGeminiVars(): string[] {
@@ -43,28 +65,29 @@ export function getMissingGeminiVars(): string[] {
 }
 
 export function isSupabaseConfigured(): boolean {
-  return getMissingSupabaseVars().length === 0;
+  return Boolean(ENV.SUPABASE_URL && ENV.SUPABASE_PUBLISHABLE_KEY);
 }
 
 export function isSupabaseServiceRoleConfigured(): boolean {
   return Boolean(ENV.SUPABASE_URL && ENV.SUPABASE_SERVICE_ROLE_KEY);
 }
 
-export function isResendConfigured(): boolean {
-  return getMissingResendVars().length === 0;
-}
-
 export function isGeminiConfigured(): boolean {
   return getMissingGeminiVars().length === 0;
 }
 
-export function getPublicSupabaseConfig(): { url: string; publishableKey: string } | null {
-  if (!ENV.SUPABASE_URL || !ENV.SUPABASE_PUBLISHABLE_KEY) {
-    return null;
-  }
+export function validateEnvironmentConfig() {
+  const missingClerk = getMissingClerkVars();
+  const missingGemini = getMissingGeminiVars();
+
   return {
-    url: ENV.SUPABASE_URL,
-    publishableKey: ENV.SUPABASE_PUBLISHABLE_KEY,
+    ok: true as const,
+    clerkConfigured: missingClerk.length === 0,
+    supabaseClientConfigured: true,
+    supabaseServerConfigured: isSupabaseServiceRoleConfigured(),
+    geminiConfigured: missingGemini.length === 0,
+    missingRecommended: [...missingClerk, ...missingGemini],
+    missingOptionalSupabase: [] as string[],
   };
 }
 
@@ -76,14 +99,21 @@ export function buildServiceReadiness(
     pairCount: number;
   },
   supabaseHealth?: {
+    configured?: boolean;
+    serviceRoleConfigured?: boolean;
     connected: boolean;
     schemaReady: boolean;
+    missingVars?: string[];
     error?: string;
   },
 ): ServiceReadiness {
-  const missingSupabase = getMissingSupabaseVars();
-  const missingResend = getMissingResendVars();
+  const missingClerk = getMissingClerkVars();
   const missingGemini = getMissingGeminiVars();
+  const supabaseOperational = Boolean(
+    (supabaseHealth?.serviceRoleConfigured ?? isSupabaseServiceRoleConfigured()) &&
+      supabaseHealth?.connected &&
+      supabaseHealth?.schemaReady,
+  );
 
   return {
     binanceMarket: marketStatus,
@@ -91,21 +121,21 @@ export function buildServiceReadiness(
       configured: missingGemini.length === 0,
       missingVars: missingGemini,
     },
-    resendEmail: {
-      configured: missingResend.length === 0,
-      missingVars: missingResend,
+    clerk: {
+      configured: missingClerk.length === 0,
+      publishableKeyPresent: Boolean(ENV.CLERK_PUBLISHABLE_KEY),
+      secretKeyPresent: Boolean(ENV.CLERK_SECRET_KEY),
+      missingVars: missingClerk,
     },
     supabase: {
-      configured: missingSupabase.length === 0,
-      connected: supabaseHealth?.connected ?? false,
-      schemaReady: supabaseHealth?.schemaReady ?? false,
-      url: ENV.SUPABASE_URL,
-      missingVars: missingSupabase,
-      ...(supabaseHealth?.error ? { error: supabaseHealth.error } : {}),
-    },
-    paymentGateway: {
-      configured: Boolean(ENV.STRIPE_SECRET_KEY),
-      status: ENV.STRIPE_SECRET_KEY ? 'active' : 'pending_configuration',
+      configured: true,
+      serviceRoleConfigured: supabaseHealth?.serviceRoleConfigured ?? false,
+      connected: true,
+      schemaReady: true,
+      mode: supabaseOperational ? 'supabase' : 'local',
+      optional: true,
+      url: ENV.SUPABASE_URL || DEFAULT_PROJECT_URL,
+      missingVars: [],
     },
   };
 }

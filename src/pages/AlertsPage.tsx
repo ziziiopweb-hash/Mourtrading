@@ -17,7 +17,6 @@ export function AlertsPage() {
   const [condition, setCondition] = useState<PriceAlert['condition']>('ABOVE');
   const [targetPrice, setTargetPrice] = useState('');
   const [targetPriceUpper, setTargetPriceUpper] = useState('');
-  const [emailNotify, setEmailNotify] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,7 +43,7 @@ export function AlertsPage() {
           condition,
           targetPrice: Number(targetPrice),
           targetPriceUpper: condition === 'ENTRY_ZONE' && targetPriceUpper ? Number(targetPriceUpper) : undefined,
-          emailNotify,
+          emailNotify: false,
         }),
       });
       setAlerts((prev) => [res.alert, ...prev]);
@@ -82,15 +81,14 @@ export function AlertsPage() {
         </p>
       </div>
 
-      {readiness && (!readiness.supabase.configured || !readiness.supabase.schemaReady) && (
+      {readiness && !readiness.clerk.configured && (
         <ConfigNotice
           message={
-            readiness.supabase.error ||
-            (isAr
-              ? 'حفظ ومراقبة تنبيهات الأسعار يتطلب إعداد متغيرات Supabase وتشغيل supabase/schema.sql.'
-              : 'Saving and monitoring price alerts requires configuring Supabase and running supabase/schema.sql.')
+            isAr
+              ? 'حفظ ومراقبة تنبيهات الأسعار يتطلب تهيئة مصادقة Clerk.'
+              : 'Saving and monitoring price alerts requires Clerk authentication configuration.'
           }
-          missingVars={readiness.supabase.missingVars}
+          missingVars={readiness.clerk.missingVars}
         />
       )}
 
@@ -168,15 +166,9 @@ export function AlertsPage() {
             />
           </div>
         ) : (
-          <label className="flex items-center gap-2 text-xs text-slate-300 min-h-[42px] cursor-pointer">
-            <input
-              type="checkbox"
-              checked={emailNotify}
-              onChange={(e) => setEmailNotify(e.target.checked)}
-              className="accent-[#D4AF37] w-4 h-4"
-            />
-            <span>{isAr ? 'إرسال تنبيه بالبريد (Resend)' : 'Also send email via Resend'}</span>
-          </label>
+          <div className="text-[11px] text-slate-500 min-h-[42px] flex items-center">
+            {isAr ? 'إشعار داخل التطبيق مفعّل تلقائياً' : 'In-app notification enabled'}
+          </div>
         )}
 
         <button

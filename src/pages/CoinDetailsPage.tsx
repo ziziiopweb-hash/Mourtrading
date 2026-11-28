@@ -1,7 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { BellPlus, Bot, Star, TrendingDown, TrendingUp } from 'lucide-react';
 import { useApp } from '../contexts/AppContext.tsx';
-import { apiFetch } from '../lib/api.ts';
+import {
+  fetchDirectBinanceIndicators,
+  fetchDirectBinanceMultiTimeframe,
+  fetchDirectBinanceOrderBook,
+  formatMarketFeedError,
+} from '../lib/binancePublic.ts';
 import { formatCompactVolume, formatPercent, formatPrice, formatTimestamp } from '../lib/formatters.ts';
 import { TradingChart } from '../components/TradingChart.tsx';
 import type {
@@ -27,10 +32,7 @@ export function CoinDetailsPage({ symbol }: { symbol: string }) {
   useEffect(() => {
     let active = true;
     setError(null);
-    apiFetch<{
-      candles: OhlcvCandle[];
-      summary: TechnicalIndicatorsSummary;
-    }>(`/api/market/indicators?symbol=${encodeURIComponent(upperSymbol)}&interval=${timeframe}`)
+    fetchDirectBinanceIndicators(upperSymbol, timeframe, 350)
       .then((res) => {
         if (!active) return;
         setCandles(res.candles);
@@ -38,27 +40,25 @@ export function CoinDetailsPage({ symbol }: { symbol: string }) {
       })
       .catch((err) => {
         if (!active) return;
-        setError(err instanceof Error ? err.message : 'Failed to load market data');
+        setError(formatMarketFeedError(err, language));
       });
 
     return () => {
       active = false;
     };
-  }, [upperSymbol, timeframe]);
+  }, [upperSymbol, timeframe, language]);
 
   useEffect(() => {
     let active = true;
-    apiFetch<{ timeframes: TechnicalIndicatorsSummary[] }>(
-      `/api/market/multi-timeframe?symbol=${encodeURIComponent(upperSymbol)}`,
-    )
-      .then((res) => {
-        if (active) setMultiTf(res.timeframes || []);
+    fetchDirectBinanceMultiTimeframe(upperSymbol)
+      .then((timeframes) => {
+        if (active) setMultiTf(timeframes || []);
       })
       .catch(() => {});
 
-    apiFetch<{ depth: OrderBookSnapshot }>(`/api/market/depth?symbol=${encodeURIComponent(upperSymbol)}&limit=15`)
-      .then((res) => {
-        if (active) setDepth(res.depth);
+    fetchDirectBinanceOrderBook(upperSymbol, 15)
+      .then((book) => {
+        if (active) setDepth(book);
       })
       .catch(() => {});
 

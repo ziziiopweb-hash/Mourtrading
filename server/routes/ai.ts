@@ -1,9 +1,17 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { getMissingSupabaseVars, isGeminiConfigured, isSupabaseConfigured } from '../config/env.ts';
+import {
+  getMissingClerkVars,
+  isClerkConfigured,
+  isGeminiConfigured,
+} from '../config/env.ts';
 import { requireAuth } from '../middleware/auth.ts';
 import { createRateLimiter } from '../middleware/rateLimit.ts';
-import { createUserSupabaseClient } from '../services/supabase.ts';
+import {
+  getUserAiHistory,
+  getUserAiQuota,
+  saveUserAiAnalysis,
+} from '../services/dataStore.ts';
 import { runChartVisionAnalysis, runMarketAnalysis } from '../services/mourAi.ts';
 
 const router = Router();
@@ -29,36 +37,10 @@ const visionAnalyzeSchema = z.object({
   language: z.enum(['ar', 'en']).default('ar'),
 });
 
-interface QuotaRpcResult {
-  plan?: string;
-  used24h: number;
-  limit24h: number;
-  remaining24h: number;
-}
-
-interface SaveAnalysisRpcResult {
-  allowed: boolean;
-  used24h: number;
-  limit24h: number;
-  remaining24h: number;
-  resetsInMinutes?: number;
-}
-
 router.get('/quota', requireAuth, async (req, res) => {
   try {
-    const userSb = createUserSupabaseClient(req.authToken!);
-    const { data, error } = await userSb.rpc('get_my_ai_quota');
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    const q = (data || {}) as QuotaRpcResult;
-    res.json({
-      plan: q.plan || req.authUser!.plan,
-      used24h: Number(q.used24h || 0),
-      limit24h: Number(q.limit24h || 3),
-      remaining24h: Number(q.remaining24h ?? 3),
-    });
+    const q = await getUserAiQuota(req.authUser!.uid, req.authUser!.plan, req.authUser!.role);
+    res.json(q);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load quota' });
   }
@@ -66,23 +48,9 @@ router.get('/quota', requireAuth, async (req, res) => {
 
 router.get('/history', requireAuth, async (req, res) => {
   try {
-    const userSb = createUserSupabaseClient(req.authToken!);
     const limit = Math.min(Number(req.query.limit || 20), 50);
-    const { data, error } = await userSb
-      .from('analyses')
-      .select('report')
-      .eq('user_id', req.authUser!.uid)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-
-    res.json({
-      analyses: (data || []).map((row) => row.report),
-    });
+    const analyses = await getUserAiHistory(req.authUser!.uid, limit);
+    res.json({ analyses });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load analysis history' });
   }
@@ -97,12 +65,11 @@ router.post('/analyze', requireAuth, aiLimiter, async (req, res) => {
     });
     return;
   }
-  if (!isSupabaseConfigured()) {
-    const missingVars = getMissingSupabaseVars();
+  if (!isClerkConfigured()) {
     res.status(503).json({
-      error: 'Supabase is not configured.',
+      error: 'Clerk authentication credentials are not configured.',
       code: 'SERVICE_NOT_CONFIGURED',
-      missingVars,
+      missingVars: getMissingClerkVars(),
     });
     return;
   }
@@ -114,15 +81,8 @@ router.post('/analyze', requireAuth, aiLimiter, async (req, res) => {
   }
 
   try {
-    const userSb = createUserSupabaseClient(req.authToken!);
-    const { data: preQuotaData, error: quotaErr } = await userSb.rpc('get_my_ai_quota');
-    if (quotaErr) {
-      res.status(500).json({ error: quotaErr.message });
-      return;
-    }
-
-    const preQuota = preQuotaData as QuotaRpcResult;
-    if (Number(preQuota.remaining24h || 0) <= 0) {
+    const preQuota = await getUserAiQuota(req.authUser!.uid, req.authUser!.plan, req.authUser!.role);
+    if (preQuota.remaining24h <= 0) {
       res.status(429).json({
         error:
           parsed.data.language === 'ar'
@@ -134,25 +94,13 @@ router.post('/analyze', requireAuth, aiLimiter, async (req, res) => {
     }
 
     const report = await runMarketAnalysis(parsed.data);
+    const saveResult = await saveUserAiAnalysis(
+      req.authUser!.uid,
+      req.authUser!.plan,
+      req.authUser!.role,
+      report,
+    );
 
-    const { data: saveData, error: saveErr } = await userSb.rpc('save_verified_ai_analysis', {
-      p_id: report.id,
-      p_symbol: report.symbol,
-      p_coin_name: report.coinName,
-      p_timeframe: report.timeframe,
-      p_analysis_type: report.analysisType,
-      p_verdict: report.verdict,
-      p_verified_price: report.verifiedPrice,
-      p_confidence_score: report.confidenceScore,
-      p_report: report,
-    });
-
-    if (saveErr) {
-      res.status(500).json({ error: saveErr.message });
-      return;
-    }
-
-    const saveResult = saveData as SaveAnalysisRpcResult;
     if (!saveResult.allowed) {
       res.status(429).json({
         error:
@@ -186,12 +134,11 @@ router.post('/analyze-image', requireAuth, aiLimiter, async (req, res) => {
     });
     return;
   }
-  if (!isSupabaseConfigured()) {
-    const missingVars = getMissingSupabaseVars();
+  if (!isClerkConfigured()) {
     res.status(503).json({
-      error: 'Supabase is not configured.',
+      error: 'Clerk authentication credentials are not configured.',
       code: 'SERVICE_NOT_CONFIGURED',
-      missingVars,
+      missingVars: getMissingClerkVars(),
     });
     return;
   }
@@ -203,15 +150,8 @@ router.post('/analyze-image', requireAuth, aiLimiter, async (req, res) => {
   }
 
   try {
-    const userSb = createUserSupabaseClient(req.authToken!);
-    const { data: preQuotaData, error: quotaErr } = await userSb.rpc('get_my_ai_quota');
-    if (quotaErr) {
-      res.status(500).json({ error: quotaErr.message });
-      return;
-    }
-
-    const preQuota = preQuotaData as QuotaRpcResult;
-    if (Number(preQuota.remaining24h || 0) <= 0) {
+    const preQuota = await getUserAiQuota(req.authUser!.uid, req.authUser!.plan, req.authUser!.role);
+    if (preQuota.remaining24h <= 0) {
       res.status(429).json({
         error: `Daily AI analysis limit reached (${preQuota.used24h}/${preQuota.limit24h} in rolling 24h).`,
         quota: preQuota,
@@ -220,25 +160,13 @@ router.post('/analyze-image', requireAuth, aiLimiter, async (req, res) => {
     }
 
     const report = await runChartVisionAnalysis(parsed.data);
+    const saveResult = await saveUserAiAnalysis(
+      req.authUser!.uid,
+      req.authUser!.plan,
+      req.authUser!.role,
+      report,
+    );
 
-    const { data: saveData, error: saveErr } = await userSb.rpc('save_verified_ai_analysis', {
-      p_id: report.id,
-      p_symbol: report.symbol,
-      p_coin_name: report.coinName,
-      p_timeframe: report.timeframe,
-      p_analysis_type: report.analysisType,
-      p_verdict: report.verdict,
-      p_verified_price: report.verifiedPrice,
-      p_confidence_score: report.confidenceScore,
-      p_report: report,
-    });
-
-    if (saveErr) {
-      res.status(500).json({ error: saveErr.message });
-      return;
-    }
-
-    const saveResult = saveData as SaveAnalysisRpcResult;
     if (!saveResult.allowed) {
       res.status(429).json({
         error: `Daily AI analysis limit reached (${saveResult.used24h}/${saveResult.limit24h} in rolling 24h).`,

@@ -86,16 +86,18 @@ export function MourAiPage() {
         </button>
       </div>
 
-      {readiness && (!readiness.geminiAi.configured || !readiness.supabase.configured || !readiness.supabase.schemaReady) && (
+      {readiness && (!readiness.geminiAi.configured || !readiness.clerk.configured) && (
         <ConfigNotice
-          title={isAr ? 'يتطلب تهيئة Gemini و Supabase للتحليل الموثق' : 'Gemini & Supabase Configuration Required'}
+          title={isAr ? 'يتطلب تهيئة Gemini و Clerk للتحليل الموثق' : 'Gemini & Clerk Configuration Required'}
           message={
-            readiness.supabase.error ||
-            (isAr
-              ? 'تشغيل محرك Mour AI وحفظ سجل التحليلات في Supabase وتطبيق الحد اليومي (3 تحليلات / 24 ساعة) يتطلب توفر المفاتيح التالية.'
-              : 'Running Mour AI, persisting analysis history in Supabase PostgreSQL, and enforcing the 3/24h rolling quota require these env vars.')
+            isAr
+              ? 'تشغيل محرك Mour AI وتطبيق الحد اليومي (3 تحليلات / 24 ساعة) يتطلب توفر المفاتيح التالية.'
+              : 'Running Mour AI and enforcing the 3/24h rolling quota require these environment variables.'
           }
-          missingVars={[...readiness.geminiAi.missingVars, ...readiness.supabase.missingVars]}
+          missingVars={[
+            ...readiness.geminiAi.missingVars,
+            ...readiness.clerk.missingVars,
+          ]}
         />
       )}
 

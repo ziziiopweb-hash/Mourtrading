@@ -14,16 +14,15 @@ import {
   LogOut,
   Menu,
   ScanLine,
-  Settings,
-  Shield,
   Signal,
   Star,
   User,
-  Users,
   X,
 } from 'lucide-react';
+import { Show, UserButton } from '@clerk/react';
 import { useApp } from '../contexts/AppContext.tsx';
 import { MourLogo } from './Logo.tsx';
+import { OfflineIndicator, PWAInstallBanner } from './PWAInstallPrompt.tsx';
 
 export function LayoutShell({ children }: { children: React.ReactNode }) {
   const {
@@ -33,6 +32,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     route,
     navigate,
     user,
+    clerkActive,
     logout,
     wsConnected,
     unreadCount,
@@ -75,16 +75,8 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     {
       items: [
         { path: '/profile', label: t.nav.profile, icon: User },
-        { path: '/security', label: t.nav.security, icon: Shield },
       ],
     },
-  ];
-
-  const adminNav = [
-    { path: '/admin', label: t.nav.admin, icon: LayoutDashboard },
-    { path: '/admin/users', label: t.nav.adminUsers, icon: Users },
-    { path: '/admin/signals', label: t.nav.adminSignals, icon: Signal },
-    { path: '/admin/settings', label: t.nav.adminSettings, icon: Settings },
   ];
 
   const mobileTabs = [
@@ -141,32 +133,6 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
               {gi < navGroups.length - 1 && <div className="border-t border-white/6 my-2" />}
             </div>
           ))}
-
-          {user?.role === 'admin' && (
-            <div className="pt-3 border-t border-[#D4AF37]/25 space-y-1">
-              <div className="px-3 pb-1 text-xs font-semibold text-[#D4AF37]">
-                {isAr ? 'إدارة المنصة' : 'Administration'}
-              </div>
-              {adminNav.map((item) => {
-                const Icon = item.icon;
-                const active = currentPath === item.path;
-                return (
-                  <button
-                    key={item.path}
-                    onClick={() => go(item.path)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                      active
-                        ? 'bg-[#D4AF37]/15 text-[#E5C158] border border-[#D4AF37]/30'
-                        : 'text-slate-300 hover:text-[#E5C158] hover:bg-white/5 border border-transparent'
-                    }`}
-                  >
-                    <Icon className="w-4 h-4 shrink-0" />
-                    <span className="truncate">{item.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
         </nav>
 
         <div className="p-3 border-t border-white/8 text-xs text-slate-500 flex items-center justify-between gap-2">
@@ -231,9 +197,22 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                     </span>
                   )}
                 </button>
+                {clerkActive && (
+                  <Show when="signed-in">
+                    <div className="flex items-center">
+                      <UserButton
+                        appearance={{
+                          elements: {
+                            avatarBox: 'w-9 h-9 border border-[#D4AF37]/40',
+                          },
+                        }}
+                      />
+                    </div>
+                  </Show>
+                )}
                 <button
                   onClick={logout}
-                  className="hidden sm:inline-flex min-h-[38px] px-3 py-1.5 rounded-lg border border-white/10 bg-[#0D131F] text-xs font-medium text-slate-300 hover:text-white items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-lg border border-white/10 bg-[#0D131F] text-xs font-medium text-slate-300 hover:text-white items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   <span>{t.nav.logout}</span>
@@ -250,7 +229,10 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        {/* Optional Admin Announcement */}
+        {/* Smart Dismissible PWA Install Banner */}
+        <PWAInstallBanner />
+
+        {/* Optional Announcement */}
         {announcement && (
           <div className="bg-[#0D131F] border-b border-[#D4AF37]/25 px-4 lg:px-6 py-2 text-xs text-[#E5C158] text-center">
             {announcement}
@@ -261,6 +243,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
         <main className="flex-1 w-full max-w-[1400px] mx-auto px-4 lg:px-8 py-6">
           {children}
         </main>
+        <OfflineIndicator />
       </div>
 
       {/* Mobile Drawer for Extra Pages */}
@@ -299,25 +282,19 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 );
               })}
 
-              {user?.role === 'admin' && (
-                <div className="pt-3 mt-2 border-t border-white/10 space-y-1">
-                  {adminNav.map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={item.path}
-                        onClick={() => go(item.path)}
-                        className="w-full flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium text-[#E5C158]"
-                      >
-                        <Icon className="w-4 h-4 shrink-0" />
-                        <span>{item.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
               <div className="pt-3 mt-2 border-t border-white/10 space-y-1">
+                {user && (
+                  <button
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      void logout();
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-semibold text-[#FCA5A5] hover:bg-white/5 cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4 shrink-0" />
+                    <span>{t.nav.logout}</span>
+                  </button>
+                )}
                 <button
                   onClick={() => go('/privacy')}
                   className="w-full text-start px-3 py-2.5 text-xs text-slate-400"

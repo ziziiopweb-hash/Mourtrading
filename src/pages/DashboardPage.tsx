@@ -40,7 +40,7 @@ export function DashboardPage() {
               ? `${user.email} · ${user.plan.toUpperCase()}`
               : isAr
                 ? 'وضع الضيف — سجّل دخولك لحفظ المحفظة والتنبيهات وتحليلات Mour AI في السحابة'
-                : 'Guest mode — sign in via Email OTP to sync portfolio, alerts, and Mour AI history'}
+                : 'Guest mode — sign in with Clerk to sync portfolio, alerts, and Mour AI history'}
           </p>
         </div>
 
@@ -62,19 +62,17 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Missing Services Banner if Supabase or Gemini AI are not yet configured/initialized */}
-      {readiness && (!readiness.supabase.configured || !readiness.supabase.schemaReady || !readiness.geminiAi.configured) && (
+      {/* Missing Services Banner only if Clerk or Gemini AI are not configured */}
+      {readiness && (!readiness.clerk.configured || !readiness.geminiAi.configured) && (
         <ConfigNotice
-          title={isAr ? 'حالة ربط الخدمات وقاعدة البيانات' : 'External Services & Database Readiness'}
+          title={isAr ? 'حالة ربط خدمات Clerk و Gemini' : 'Clerk & AI Readiness'}
           message={
-            readiness.supabase.error
-              ? readiness.supabase.error
-              : isAr
-                ? 'بيانات السوق الحية والشارت والمؤشرات وحاسبة المخاطر تعمل مباشرة الآن. لتفعيل الحسابات السحابية، إرسال رموز OTP، حفظ المحفظة والإشارات في Supabase، أضف المتغيرات التالية:'
-                : 'Live Binance markets, charts, indicators, and risk calculator are active. To enable cloud user accounts, OTP emails, Supabase PostgreSQL persistence, and signals, configure these env vars:'
+            isAr
+              ? 'بيانات السوق الحية والشارت والمؤشرات وحاسبة المخاطر تعمل مباشرة الآن. لتفعيل الحسابات عبر Clerk وتحليلات Gemini AI، أضف المتغيرات التالية:'
+              : 'Live Binance markets, charts, indicators, and risk calculator are active. To enable Clerk user authentication and Gemini AI analyses, configure these env vars:'
           }
           missingVars={[
-            ...readiness.supabase.missingVars,
+            ...readiness.clerk.missingVars,
             ...readiness.geminiAi.missingVars,
           ]}
         />

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Check, CreditCard, Info } from 'lucide-react';
 import { useApp } from '../contexts/AppContext.tsx';
-import { ApiError, apiFetch } from '../lib/api.ts';
+import { apiFetch } from '../lib/api.ts';
 import type { AppConfig } from '../types/trading.ts';
 
 export function PricingPage() {
@@ -9,40 +9,36 @@ export function PricingPage() {
   const isAr = language === 'ar';
 
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [gatewayConfigured, setGatewayConfigured] = useState(false);
   const [cycle, setCycle] = useState<'monthly' | 'annual'>('monthly');
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch<{ config: AppConfig; paymentGatewayConfigured: boolean }>('/api/user/plans')
+    apiFetch<{ config: AppConfig }>('/api/user/plans')
       .then((res) => {
         setConfig(res.config);
-        setGatewayConfigured(res.paymentGatewayConfigured);
       })
       .catch(() => {});
   }, []);
 
-  const handleUpgrade = async () => {
+  const handlePlanAction = () => {
     if (!user) {
       navigate('/login');
       return;
     }
-    setStatusMsg(null);
-    try {
-      await apiFetch('/api/user/subscription/checkout', {
-        method: 'POST',
-        body: JSON.stringify({ cycle }),
-      });
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setStatusMsg(err.message);
-      }
+    if (user.plan === 'pro') {
+      navigate('/dashboard');
+      return;
     }
+    setStatusMsg(
+      isAr
+        ? 'تم تعطيل بوابة الدفع الإلكترونية حالياً. يتم تفعيل باقة Pro مباشرة عبر فريق الدعم.'
+        : 'Online card billing is disabled. Pro plan activations are handled directly by support.',
+    );
   };
 
   const freeLimit = config?.freeDailyAiLimit ?? 3;
   const proLimit = config?.proDailyAiLimit ?? 50;
-  const priceDisplay = cycle === 'monthly' ? config?.proMonthlyPriceUsd ?? 29 : config?.proAnnualPriceUsd ?? 290;
+  const priceDisplay = cycle === 'monthly' ? config?.proMonthlyPriceUsd ?? 5 : config?.proAnnualPriceUsd ?? 50;
 
   return (
     <div className="space-y-6">
@@ -54,8 +50,8 @@ export function PricingPage() {
           </h1>
           <p className="text-xs text-slate-400 mt-1">
             {isAr
-              ? 'الحدود والأسعار قابلة للتعديل المباشر من قبل إدارة المنصة.'
-              : 'Usage limits and pricing are dynamically managed from the Admin Console.'}
+              ? 'تفاصيل الحدود اليومية والمزايا المتاحة لكل باقة.'
+              : 'Daily usage limits and available features for each tier.'}
           </p>
         </div>
 
@@ -79,16 +75,14 @@ export function PricingPage() {
         </div>
       </div>
 
-      {!gatewayConfigured && (
-        <div className="p-4 rounded-xl bg-[#0D131F] border border-[#D4AF37]/30 text-xs text-[#E5C158] flex items-start gap-2.5">
-          <Info className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>
-            {isAr
-              ? 'حالة الدفع: بوابة الدفع قيد الإعداد (Pending Payment Provider Integration). لا يتم تنفيذ مدفوعات وهمية حتى ربط مزود دفع فعلي أو تفعيل الخطة من المسؤول.'
-              : 'Payment Integration Status: Pending external payment provider configuration (STRIPE_SECRET_KEY). No simulated payments are processed.'}
-          </span>
-        </div>
-      )}
+      <div className="p-4 rounded-xl bg-[#0D131F] border border-[#D4AF37]/30 text-xs text-[#E5C158] flex items-start gap-2.5">
+        <Info className="w-4 h-4 shrink-0 mt-0.5" />
+        <span>
+          {isAr
+            ? 'الدفع الإلكتروني معطل: جميع ميزات التحليل والسوق تعمل دون بوابة دفع، وتُفعّل باقة Pro عبر الدعم.'
+            : 'Online Payment Processing Disabled: All market intelligence, AI analysis, and user tools operate without external card billing.'}
+        </span>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* FREE PLAN */}
@@ -147,7 +141,7 @@ export function PricingPage() {
           </div>
 
           <button
-            onClick={handleUpgrade}
+            onClick={handlePlanAction}
             className="w-full min-h-[44px] rounded-xl bg-[#D4AF37] hover:bg-[#E5C158] text-[#070A0F] text-sm font-bold cursor-pointer"
           >
             {user?.plan === 'pro'
@@ -155,8 +149,8 @@ export function PricingPage() {
                 ? 'مفعّلة (PRO)'
                 : 'Active (PRO)'
               : isAr
-                ? 'طلب الترقية إلى Pro'
-                : 'Request Pro Upgrade'}
+                ? 'طلب تفعيل باقة Pro'
+                : 'Request Pro Activation'}
           </button>
         </div>
       </div>

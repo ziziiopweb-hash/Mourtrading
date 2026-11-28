@@ -122,9 +122,12 @@ export function MarketsPage() {
       </div>
 
       {marketError && (
-        <div className="p-4 rounded-xl bg-[#EF4444]/10 border border-[#EF4444]/30 text-sm text-[#EF4444] flex items-center justify-between gap-3">
+        <div className="p-4 rounded-xl bg-[#EF4444]/10 border border-[#EF4444]/30 text-sm text-[#FCA5A5] flex flex-wrap items-center justify-between gap-3">
           <span>{marketError}</span>
-          <button onClick={() => refreshMarkets()} className="underline text-xs cursor-pointer">
+          <button
+            onClick={() => refreshMarkets()}
+            className="px-3 py-1.5 rounded-lg bg-[#EF4444]/15 border border-[#EF4444]/30 text-xs font-semibold text-[#FCA5A5] hover:bg-[#EF4444]/25 cursor-pointer shrink-0"
+          >
             {t.common.retry}
           </button>
         </div>
@@ -157,7 +160,11 @@ export function MarketsPage() {
               ) : visible.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-sm text-slate-400">
-                    {t.markets.empty}
+                    {marketError
+                      ? isAr
+                        ? 'تعذر تحميل بيانات الأسواق الحية حالياً. يرجى المحاولة مرة أخرى.'
+                        : 'Unable to load live market data right now. Please retry.'
+                      : t.markets.empty}
                   </td>
                 </tr>
               ) : (

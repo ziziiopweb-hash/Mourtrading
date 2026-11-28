@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import {
   Activity,
   Download,
-  Lock,
   Megaphone,
   Search,
   Settings,
@@ -15,30 +14,18 @@ import { formatPrice, formatTimestamp } from '../lib/formatters.ts';
 import type { AppConfig, Timeframe, TradingSignal, UserProfile } from '../types/trading.ts';
 
 function AdminGuard({ children }: { children: React.ReactNode }) {
-  const { user, language, navigate } = useApp();
-  const isAr = language === 'ar';
+  const { isAdmin, authLoading, navigate } = useApp();
 
-  if (!user || user.role !== 'admin') {
-    return (
-      <div className="bg-[#0D131F] border border-[#EF4444]/30 rounded-xl p-8 text-center space-y-3">
-        <Lock className="w-8 h-8 text-[#EF4444] mx-auto" />
-        <h2 className="text-base font-bold text-[#F8FAFC]">
-          {isAr ? 'وصول مقيد — للمسؤول فقط' : 'Restricted — Administrator Access Only'}
-        </h2>
-        <p className="text-xs text-slate-400">
-          {isAr
-            ? 'لا تملك صلاحيات المسؤول للوصول إلى هذه الصفحة.'
-            : 'You do not have administrator claims required to view this console.'}
-        </p>
-        <button
-          onClick={() => navigate('/')}
-          className="px-4 py-2 rounded-xl bg-[#D4AF37] text-[#070A0F] text-xs font-bold cursor-pointer"
-        >
-          {isAr ? 'العودة للرئيسية' : 'Return Home'}
-        </button>
-      </div>
-    );
+  useEffect(() => {
+    if (!authLoading && !isAdmin) {
+      navigate('/');
+    }
+  }, [authLoading, isAdmin, navigate]);
+
+  if (authLoading || !isAdmin) {
+    return null;
   }
+
   return <>{children}</>;
 }
 
@@ -60,7 +47,6 @@ export function AdminDashboardPage() {
     apiHealth: {
       binance: { ok: boolean; wsConnected: boolean; pairCount: number };
       geminiConfigured: boolean;
-      resendConfigured: boolean;
       checkedAt: string;
     };
     recentAuthFailures: Array<{ emailHash?: string; reason?: string; ip?: string; createdAt?: string }>;
@@ -130,7 +116,7 @@ export function AdminDashboardPage() {
                 { label: isAr ? 'محاولات الدخول الفاشلة' : 'Failed Auth Attempts', val: data.stats.failedAuthAttemptsRecent },
                 { label: isAr ? 'إجمالي الإشارات' : 'Total Signals', val: data.stats.totalSignals },
                 { label: 'Binance WS', val: data.apiHealth.binance.wsConnected ? 'CONNECTED' : 'RECONNECTING' },
-                { label: 'Gemini / Resend', val: `${data.apiHealth.geminiConfigured ? 'OK' : 'NO'} / ${data.apiHealth.resendConfigured ? 'OK' : 'NO'}` },
+                { label: 'Gemini AI', val: data.apiHealth.geminiConfigured ? 'READY' : 'OFF' },
               ].map((kpi, i) => (
                 <div key={i} className="bg-[#0D131F] border border-white/10 rounded-xl p-4">
                   <div className="text-xs text-slate-400">{kpi.label}</div>
@@ -178,7 +164,7 @@ export function AdminDashboardPage() {
 }
 
 export function AdminUsersPage() {
-  const { language, t } = useApp();
+  const { language, t, user: currentUser } = useApp();
   const isAr = language === 'ar';
 
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -194,7 +180,10 @@ export function AdminUsersPage() {
     loadUsers();
   }, []);
 
-  const updateUser = async (uid: string, patch: { status?: 'active' | 'suspended'; plan?: 'free' | 'pro' }) => {
+  const updateUser = async (
+    uid: string,
+    patch: { status?: 'active' | 'suspended'; plan?: 'free' | 'pro'; role?: 'user' | 'admin' },
+  ) => {
     const res = await apiFetch<{ user: UserProfile }>(`/api/admin/users/${uid}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
@@ -239,34 +228,45 @@ export function AdminUsersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/6">
-              {users.map((u) => (
-                <tr key={u.uid}>
-                  <td className="py-3 px-4 text-slate-200">{u.email}</td>
-                  <td className="py-3 px-4 text-[#E5C158] uppercase">{u.role}</td>
-                  <td className="py-3 px-4 uppercase">{u.plan}</td>
-                  <td className={`py-3 px-4 uppercase ${u.status === 'active' ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
-                    {u.status}
-                  </td>
-                  <td className="py-3 px-4 text-end space-x-2">
-                    <button
-                      onClick={() => updateUser(u.uid, { plan: u.plan === 'pro' ? 'free' : 'pro' })}
-                      className="px-2.5 py-1 rounded bg-white/8 hover:bg-white/15 text-slate-200 cursor-pointer"
-                    >
-                      {u.plan === 'pro' ? 'Set Free' : 'Grant Pro'}
-                    </button>
-                    {u.role !== 'admin' && (
+              {users.map((u) => {
+                const isSelf = Boolean(currentUser && currentUser.uid === u.uid);
+                return (
+                  <tr key={u.uid}>
+                    <td className="py-3 px-4 text-slate-200">{u.email}</td>
+                    <td className="py-3 px-4 text-[#E5C158] uppercase">{u.role}</td>
+                    <td className="py-3 px-4 uppercase">{u.plan}</td>
+                    <td className={`py-3 px-4 uppercase ${u.status === 'active' ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
+                      {u.status}
+                    </td>
+                    <td className="py-3 px-4 text-end space-x-2">
                       <button
-                        onClick={() =>
-                          updateUser(u.uid, { status: u.status === 'active' ? 'suspended' : 'active' })
-                        }
-                        className="px-2.5 py-1 rounded bg-[#EF4444]/15 text-[#EF4444] cursor-pointer"
+                        onClick={() => updateUser(u.uid, { plan: u.plan === 'pro' ? 'free' : 'pro' })}
+                        className="px-2.5 py-1 rounded bg-white/8 hover:bg-white/15 text-slate-200 cursor-pointer"
                       >
-                        {u.status === 'active' ? 'Suspend' : 'Reactivate'}
+                        {u.plan === 'pro' ? 'Set Free' : 'Grant Pro'}
                       </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                      {!isSelf && (
+                        <button
+                          onClick={() => updateUser(u.uid, { role: u.role === 'admin' ? 'user' : 'admin' })}
+                          className="px-2.5 py-1 rounded bg-[#D4AF37]/15 text-[#E5C158] cursor-pointer"
+                        >
+                          {u.role === 'admin' ? 'Revoke Admin' : 'Make Admin'}
+                        </button>
+                      )}
+                      {u.role !== 'admin' && (
+                        <button
+                          onClick={() =>
+                            updateUser(u.uid, { status: u.status === 'active' ? 'suspended' : 'active' })
+                          }
+                          className="px-2.5 py-1 rounded bg-[#EF4444]/15 text-[#EF4444] cursor-pointer"
+                        >
+                          {u.status === 'active' ? 'Suspend' : 'Reactivate'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -477,8 +477,8 @@ export function AdminSettingsPage() {
 
   const [freeLimit, setFreeLimit] = useState(3);
   const [proLimit, setProLimit] = useState(50);
-  const [monthlyPrice, setMonthlyPrice] = useState(29);
-  const [annualPrice, setAnnualPrice] = useState(290);
+  const [monthlyPrice, setMonthlyPrice] = useState(5);
+  const [annualPrice, setAnnualPrice] = useState(50);
   const [durationDays, setDurationDays] = useState(30);
   const [announcement, setAnnouncement] = useState('');
   const [broadcastTitle, setBroadcastTitle] = useState('');

@@ -5,12 +5,17 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import { clerkMiddleware } from '@clerk/express';
 import { WebSocketServer } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import {
   buildServiceReadiness,
   ENV,
+  getPublicClerkConfig,
   getPublicSupabaseConfig,
+  isClerkConfigured,
+  isSupabaseServiceRoleConfigured,
+  validateEnvironmentConfig,
 } from './server/config/env.ts';
 import { binanceMarket } from './server/services/binanceMarket.ts';
 import { monitorEngine } from './server/services/monitorEngine.ts';
@@ -26,30 +31,59 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function bootstrap() {
+  const envCheck = validateEnvironmentConfig();
   const app = express();
   app.set('trust proxy', 1);
 
+  // Relax cross-origin policies so AI Studio iframe preview and external Clerk/CDN scripts never get blocked
   app.use(
     helmet({
       contentSecurityPolicy: false,
       frameguard: false,
       crossOriginEmbedderPolicy: false,
+      crossOriginOpenerPolicy: false,
+      crossOriginResourcePolicy: false,
     }),
   );
   app.use(cookieParser());
   app.use(express.json({ limit: '10mb' }));
 
-  // Public health, database verification, and public Supabase client config (never exposes secrets)
+  // Mount Clerk Express middleware ONLY on /api/* (and never on HTML/Vite document requests)
+  // so Clerk dev-browser handshake never issues 307 redirects on iframe page loads.
+  if (isClerkConfigured()) {
+    const clerkApiAuth = clerkMiddleware({
+      publishableKey: ENV.CLERK_PUBLISHABLE_KEY,
+      secretKey: ENV.CLERK_SECRET_KEY,
+    });
+    app.use('/api', (req, res, next) => {
+      const dest = req.headers['sec-fetch-dest'];
+      if (dest === 'document' || dest === 'iframe') {
+        next();
+        return;
+      }
+      clerkApiAuth(req, res, next);
+    });
+  }
+
+  // Public health & client config (never exposes secrets)
   app.get('/api/health', async (req, res) => {
     const force = req.query.refresh === '1';
     const marketStatus = binanceMarket.getStatus();
-    const supabaseHealth = await testSupabaseDatabaseConnection(force);
+    const supabaseHealth = isSupabaseServiceRoleConfigured()
+      ? await testSupabaseDatabaseConnection(force)
+      : {
+          configured: true,
+          serviceRoleConfigured: false,
+          connected: true,
+          schemaReady: true,
+        };
     const readiness = buildServiceReadiness(marketStatus, supabaseHealth);
     res.json({
       ok: true,
       service: 'MourTrading',
       timestamp: new Date().toISOString(),
       readiness,
+      clerkConfig: getPublicClerkConfig(),
       supabaseConfig: getPublicSupabaseConfig(),
     });
   });
@@ -138,7 +172,9 @@ async function bootstrap() {
   monitorEngine.start();
 
   server.listen(ENV.PORT, '0.0.0.0', () => {
-    console.log(`MourTrading server listening on http://0.0.0.0:${ENV.PORT}`);
+    console.log(
+      `MourTrading server listening on http://0.0.0.0:${ENV.PORT} (Clerk: ${envCheck.clerkConfigured ? 'configured' : 'awaiting key'}, Persistence: ${envCheck.supabaseServerConfigured ? 'Supabase (with local fallback)' : 'local store (.mourtrading-data/store.json)'}, Gemini: ${envCheck.geminiConfigured ? 'configured' : 'awaiting key'})`,
+    );
   });
 }
 

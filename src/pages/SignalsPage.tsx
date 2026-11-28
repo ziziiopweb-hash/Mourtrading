@@ -3,11 +3,10 @@ import { Activity, AlertTriangle, ShieldCheck, Signal } from 'lucide-react';
 import { useApp } from '../contexts/AppContext.tsx';
 import { apiFetch } from '../lib/api.ts';
 import { formatPercent, formatPrice, formatTimestamp } from '../lib/formatters.ts';
-import { ConfigNotice } from '../components/ConfigNotice.tsx';
 import type { SignalEvent, TradingSignal } from '../types/trading.ts';
 
 export function SignalsPage() {
-  const { language, t, navigate, tickerMap, readiness } = useApp();
+  const { language, t, navigate, tickerMap } = useApp();
   const isAr = language === 'ar';
 
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'COMPLETED'>('ALL');
@@ -82,18 +81,6 @@ export function SignalsPage() {
         </div>
       </div>
 
-      {readiness && (!readiness.supabase.configured || !readiness.supabase.schemaReady) && (
-        <ConfigNotice
-          message={
-            readiness.supabase.error ||
-            (isAr
-              ? 'حفظ ومراقبة إشارات التداول يتطلب إعداد متغيرات Supabase وتشغيل supabase/schema.sql.'
-              : 'Storing and monitoring Spot signals requires configuring Supabase environment variables and running supabase/schema.sql.')
-          }
-          missingVars={readiness.supabase.missingVars}
-        />
-      )}
-
       {loading ? (
         <div className="py-12 text-center text-sm text-slate-400">{t.common.loading}</div>
       ) : signals.length === 0 ? (
@@ -104,8 +91,8 @@ export function SignalsPage() {
           </p>
           <p className="text-xs text-slate-500">
             {isAr
-              ? 'لا يتم توليد أو عرض أي نسب نجاح تاريخية وهمية. الإشارات تظهر فقط عند نشرها من الإدارة أو اعتمادها.'
-              : 'MourTrading never fabricates historical win rates. Signals appear here once published by Admin or verified.'}
+              ? 'لا يتم توليد أو عرض أي نسب نجاح تاريخية وهمية. الإشارات تظهر فقط عند نشرها واعتمادها.'
+              : 'MourTrading never fabricates historical win rates. Signals appear here once published and verified.'}
           </p>
         </div>
       ) : (
@@ -119,7 +106,7 @@ export function SignalsPage() {
                     <div className="flex items-center gap-2 text-xs text-slate-400">
                       <span className="inline-flex items-center gap-1 text-[#D4AF37] font-semibold">
                         <ShieldCheck className="w-3.5 h-3.5" />
-                        {sig.source === 'ADMIN' ? (isAr ? 'إشارة رسمية من الإدارة' : 'Official Admin Signal') : 'AI Signal'}
+                        {sig.source === 'ADMIN' ? (isAr ? 'إشارة موثقة' : 'Verified Signal') : 'AI Signal'}
                       </span>
                       <span aria-hidden="true">·</span>
                       <span className="font-mono-num uppercase">{sig.timeframe}</span>
